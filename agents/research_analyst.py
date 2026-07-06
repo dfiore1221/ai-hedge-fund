@@ -23,6 +23,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
 
 DOCS_DIR = PROJECT_ROOT / "docs"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
+MARKET_INTELLIGENCE_REPORT = PROJECT_ROOT / "reports" / "market_intelligence" / "daily_market_intelligence.md"
 
 
 def get_openai_api_key():
@@ -60,6 +61,24 @@ def load_fund_documents():
     return "\n".join(documents)
 
 
+def load_market_intelligence_context(max_chars=6000):
+    if not MARKET_INTELLIGENCE_REPORT.exists():
+        return {
+            "status": "missing",
+            "message": "No daily market intelligence report found. Run `python3 main.py macro today` before company research.",
+        }
+
+    text = MARKET_INTELLIGENCE_REPORT.read_text(encoding="utf-8")
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n\n[Market intelligence context truncated for prompt size.]"
+
+    return {
+        "status": "available",
+        "path": str(MARKET_INTELLIGENCE_REPORT),
+        "report_excerpt": text,
+    }
+
+
 def build_research_prompt(
     ticker,
     fund_docs,
@@ -68,6 +87,7 @@ def build_research_prompt(
     sec_financial_facts,
     sec_filing_evidence,
     research_memory,
+    market_intelligence,
 ):
     return f"""
 You are the first Research Analyst Agent for an AI Hedge Fund.
@@ -92,6 +112,9 @@ Primary SEC Filing Evidence:
 Research Memory:
 {research_memory}
 
+Market Intelligence Context:
+{market_intelligence}
+
 Task:
 Analyze the company with ticker: {ticker}
 
@@ -105,12 +128,15 @@ Use this exact structure:
    - State what changed, what stayed the same, and whether confidence increased or decreased.
    - If no prior research exists, say this is the first stored memo for this ticker.
 3. Business Overview
-4. Data Quality Check
+4. Market Regime Context
+   - Summarize the current macro regime if a daily market intelligence report is available.
+   - Explain whether the macro/capital-flow backdrop supports or weakens deeper research on this company.
+5. Data Quality Check
    - State what data is present.
    - State what data is missing or stale.
    - Reconcile conflicts between secondary market data and Verified SEC Financial Facts.
    - Do not invent facts.
-5. Investment Scorecard
+6. Investment Scorecard
    - Business Quality: 0-100
    - Financial Strength: 0-100
    - Growth: 0-100
@@ -118,14 +144,14 @@ Use this exact structure:
    - Risk: 0-100, where higher means lower risk
    - Catalyst Strength: 0-100
    - Overall Research Score: 0-100
-6. Why This Company Might Be Attractive
-7. Main Risks
-8. Key SEC Filing Signals
+7. Why This Company Might Be Attractive
+8. Main Risks
+9. Key SEC Filing Signals
    - Use the primary SEC filing evidence when available.
    - Name the filing form and filing date behind important claims.
-9. What Data We Still Need
-10. Recommended Next Step
-11. Final Rating: Reject / Watchlist / Deep Research Candidate
+10. What Data We Still Need
+11. Recommended Next Step
+12. Final Rating: Reject / Watchlist / Deep Research Candidate
 
 Rules:
 - Be clear enough for a beginner but rigorous enough for an investment committee.
@@ -133,6 +159,7 @@ Rules:
 - Prefer primary SEC filing evidence over secondary data when they conflict.
 - Prefer Verified SEC Financial Facts over Yahoo Finance or other secondary fields when calculating financial strength, free cash flow, net cash/debt, or margins.
 - Use Research Memory to compare the new analysis against prior stored reports.
+- If Market Intelligence Context is available, incorporate it before making any company-level conclusion.
 - Do not treat prior reports as truth. Treat them as historical analyst views to confirm, update, or reject.
 - Avoid false precision. Explain every score in plain English.
 - Do not recommend a trade yet. This is company research only.
@@ -149,6 +176,7 @@ def research_company(ticker):
     sec_financial_facts = get_structured_financial_facts(ticker)
     sec_filing_evidence = get_latest_filing_evidence(ticker)
     research_memory = build_research_memory_context(ticker)
+    market_intelligence = load_market_intelligence_context()
     prompt = build_research_prompt(
         ticker,
         fund_docs,
@@ -157,6 +185,7 @@ def research_company(ticker):
         sec_financial_facts,
         sec_filing_evidence,
         research_memory,
+        market_intelligence,
     )
 
     client = OpenAI()

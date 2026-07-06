@@ -5,10 +5,25 @@ An early-stage research operating system for generating investment-grade company
 ## Current Workflow
 
 ```bash
+python3 main.py macro today
 python3 main.py analyze MSFT
 python3 main.py history MSFT
 python3 main.py thesis MSFT
 python3 main.py facts MSFT
+```
+
+The `macro today` command:
+
+1. Pulls major index, volatility, rate, dollar, commodity, and crypto proxies.
+2. Ranks sector ETFs versus SPY.
+3. Produces a macro score, market regime, confidence score, and sector rotation table.
+4. Saves the report in `reports/market_intelligence/`.
+
+Company research reads the latest market-intelligence report when available, so the preferred workflow is:
+
+```bash
+python3 main.py macro today
+python3 main.py analyze MSFT
 ```
 
 The `analyze` command:

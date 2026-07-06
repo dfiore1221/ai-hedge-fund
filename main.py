@@ -129,9 +129,31 @@ def facts(ticker):
     print(format_structured_financial_facts(get_structured_financial_facts(ticker)))
 
 
+def macro(period):
+    if period.lower() != "today":
+        raise ValueError("Macro command currently supports: today")
+
+    try:
+        from agents.market_intelligence import (
+            format_market_intelligence_report,
+            generate_daily_market_intelligence,
+            save_market_intelligence_report,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    report = generate_daily_market_intelligence()
+    output_path = save_market_intelligence_report(report)
+    print(format_market_intelligence_report(report))
+    print(f"Saved market intelligence report to: {output_path}")
+
+
 def main():
     if len(sys.argv) < 3:
         print("Usage:")
+        print("  python3 main.py macro today")
         print("  python3 main.py analyze MSFT")
         print("  python3 main.py history MSFT")
         print("  python3 main.py thesis MSFT")
@@ -145,6 +167,8 @@ def main():
     try:
         if command == "analyze":
             analyze(ticker)
+        elif command == "macro":
+            macro(ticker)
         elif command == "history":
             history(ticker)
         elif command == "thesis":

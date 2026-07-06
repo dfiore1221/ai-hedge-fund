@@ -1,5 +1,34 @@
 import yfinance as yf
 
+MACRO_TICKERS = {
+    "sp500": "^GSPC",
+    "nasdaq": "^IXIC",
+    "dow": "^DJI",
+    "russell_2000": "^RUT",
+    "vix": "^VIX",
+    "dxy": "DX-Y.NYB",
+    "ten_year_treasury": "^TNX",
+    "two_year_treasury": "^IRX",
+    "gold": "GC=F",
+    "oil": "CL=F",
+    "copper": "HG=F",
+    "bitcoin": "BTC-USD",
+}
+
+SECTOR_ETFS = {
+    "Technology": "XLK",
+    "Financials": "XLF",
+    "Healthcare": "XLV",
+    "Industrials": "XLI",
+    "Energy": "XLE",
+    "Utilities": "XLU",
+    "Consumer Discretionary": "XLY",
+    "Consumer Staples": "XLP",
+    "Materials": "XLB",
+    "Real Estate": "XLRE",
+    "Communication Services": "XLC",
+}
+
 
 def dataframe_preview(frame, max_rows=8):
     if frame is None or frame.empty:
@@ -55,6 +84,79 @@ def get_company_data(ticker):
     }
 
     return data
+
+
+def get_price_history(ticker, period="3mo"):
+    try:
+        history = yf.Ticker(ticker).history(period=period, auto_adjust=True)
+    except Exception as exc:
+        return {"ticker": ticker, "error": str(exc)}
+
+    if history is None or history.empty:
+        return {"ticker": ticker, "error": "No price history returned."}
+
+    close = history["Close"].dropna()
+    if close.empty:
+        return {"ticker": ticker, "error": "No close prices returned."}
+
+    latest = float(close.iloc[-1])
+    previous = float(close.iloc[-2]) if len(close) > 1 else latest
+    first = float(close.iloc[0])
+    twenty_day_start = float(close.iloc[-21]) if len(close) >= 21 else first
+
+    return {
+        "ticker": ticker,
+        "latest": latest,
+        "one_day_change_pct": pct_change(latest, previous),
+        "period_change_pct": pct_change(latest, first),
+        "twenty_day_change_pct": pct_change(latest, twenty_day_start),
+        "latest_date": str(close.index[-1].date()),
+    }
+
+
+def get_macro_market_snapshot():
+    return {
+        name: get_price_history(ticker)
+        for name, ticker in MACRO_TICKERS.items()
+    }
+
+
+def get_sector_rotation_snapshot():
+    spy = get_price_history("SPY")
+    sectors = []
+
+    for sector, ticker in SECTOR_ETFS.items():
+        data = get_price_history(ticker)
+        relative_to_spy = None
+
+        if "error" not in data and "error" not in spy:
+            relative_to_spy = data["twenty_day_change_pct"] - spy["twenty_day_change_pct"]
+
+        sectors.append({
+            "sector": sector,
+            "ticker": ticker,
+            "latest": data.get("latest"),
+            "one_day_change_pct": data.get("one_day_change_pct"),
+            "twenty_day_change_pct": data.get("twenty_day_change_pct"),
+            "relative_to_spy_20d": relative_to_spy,
+            "error": data.get("error"),
+        })
+
+    sectors.sort(
+        key=lambda item: item["relative_to_spy_20d"] if item["relative_to_spy_20d"] is not None else -999,
+        reverse=True,
+    )
+
+    return {
+        "benchmark": spy,
+        "sectors": sectors,
+    }
+
+
+def pct_change(latest, previous):
+    if previous == 0:
+        return None
+    return ((latest - previous) / previous) * 100
 
 
 if __name__ == "__main__":
