@@ -12,6 +12,7 @@ Run directly for a manual test:
 
 from pathlib import Path
 import re
+from bs4 import BeautifulSoup
 
 import requests
 
@@ -116,6 +117,32 @@ def build_filing_url(cik, accession_number, primary_document):
     )
 
 
+def extract_text_from_html(html_path):
+    """
+    Convert a downloaded SEC filing HTML file into readable plain text.
+
+    Returns the path to the generated TXT file.
+    """
+    html_path = Path(html_path)
+    raw_html = html_path.read_text(encoding="utf-8", errors="ignore")
+
+    soup = BeautifulSoup(raw_html, "html.parser")
+
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+
+    text = soup.get_text("\n")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = text.strip()
+
+    txt_path = html_path.with_suffix(".txt")
+    txt_path.write_text(text, encoding="utf-8")
+
+    print(f"Extracted text to {txt_path}")
+    return txt_path
+
+
 def download_filing(ticker, form_type="10-K"):
     """
     Download the latest filing of the requested form type and save it locally.
@@ -173,4 +200,5 @@ if __name__ == "__main__":
     ticker_input = input("Ticker: ").strip().upper()
 
     print_recent_filings(ticker_input, limit=25)
-    download_filing(ticker_input, "10-K")
+    html_path = download_filing(ticker_input, "10-K")
+    extract_text_from_html(html_path)
