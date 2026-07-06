@@ -1,0 +1,1 @@
+"""Investment framework validation utilities."""

@@ -1,0 +1,53 @@
+{
+  "version": "1.0",
+  "name": "AI Hedge Fund Research Framework",
+  "purpose": "Enforce a repeatable, evidence-based, auditable company research memo process.",
+  "required_sections": [
+    "Executive Summary",
+    "Memory and Thesis Update",
+    "Business Overview",
+    "Data Quality Check",
+    "Investment Scorecard",
+    "Why This Company Might Be Attractive",
+    "Main Risks",
+    "Key SEC Filing Signals",
+    "What Data We Still Need",
+    "Recommended Next Step",
+    "Final Rating"
+  ],
+  "required_scorecard_items": [
+    "Business Quality",
+    "Financial Strength",
+    "Growth",
+    "Valuation",
+    "Risk",
+    "Catalyst Strength",
+    "Overall Research Score"
+  ],
+  "required_evidence_terms": [
+    "10-K",
+    "10-Q",
+    "SEC",
+    "filing",
+    "missing"
+  ],
+  "allowed_final_ratings": [
+    "Reject",
+    "Watchlist",
+    "Deep Research Candidate"
+  ],
+  "prohibited_terms": [
+    "buy now",
+    "sell now",
+    "short now",
+    "guaranteed",
+    "risk-free"
+  ],
+  "quality_weights": {
+    "required_sections": 40,
+    "scorecard": 25,
+    "evidence": 20,
+    "final_rating": 10,
+    "prohibited_language": 5
+  }
+}
