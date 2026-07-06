@@ -26,6 +26,8 @@ python3 main.py macro today
 python3 main.py analyze MSFT
 ```
 
+Company research also applies the rules in `framework/macro_scoring_rules.json` so valuation, risk, catalyst strength, and final rating are interpreted in the context of the current market regime.
+
 The `analyze` command:
 
 1. Loads the fund documents in `docs/`.

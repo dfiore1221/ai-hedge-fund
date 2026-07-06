@@ -1,0 +1,39 @@
+{
+  "version": "1.0",
+  "purpose": "Guide company research score interpretation based on the current market regime.",
+  "rules": {
+    "Risk-On": {
+      "summary": "Risk appetite is supportive. Growth and catalyst scores may receive more benefit of the doubt when company fundamentals and sector leadership agree.",
+      "score_guidance": {
+        "Valuation": "Do not relax valuation discipline, but allow higher tolerance for premium multiples when growth, quality, and sector leadership are confirmed.",
+        "Risk": "Company-specific risk remains primary, but macro risk pressure is lower.",
+        "Catalyst Strength": "Near-term catalysts may deserve more weight if the company's sector is leading or improving.",
+        "Final Rating": "A Deep Research Candidate can move toward Watchlist faster if primary evidence is strong."
+      }
+    },
+    "Neutral": {
+      "summary": "Risk appetite is mixed. Keep company scores anchored to primary evidence and avoid macro-driven conviction.",
+      "score_guidance": {
+        "Valuation": "Require normal valuation discipline and clear upside drivers.",
+        "Risk": "Do not assume either macro tailwind or headwind.",
+        "Catalyst Strength": "Only company-specific catalysts should lift the score materially.",
+        "Final Rating": "Maintain research status unless evidence is strong across fundamentals, valuation, and catalysts."
+      }
+    },
+    "Risk-Off": {
+      "summary": "Risk appetite is weak. Raise the burden of proof for high-duration growth, premium valuation, and catalyst timing.",
+      "score_guidance": {
+        "Valuation": "Apply more caution to premium multiples, especially when free cash flow, capex, or discount-rate sensitivity is unresolved.",
+        "Risk": "Lower the risk score when the company is high-duration, cyclically exposed, highly levered, or dependent on speculative catalysts.",
+        "Catalyst Strength": "Near-term catalysts should be discounted unless they are primary-source verified and likely to matter despite weak market breadth.",
+        "Final Rating": "Prefer Deep Research Candidate over Watchlist until macro pressure eases or company-specific evidence is unusually strong."
+      }
+    }
+  },
+  "required_output": [
+    "State the current market regime.",
+    "Explain which scorecard categories were affected by macro context.",
+    "Do not let macro context override primary company evidence.",
+    "Separate company quality from current portfolio/trade attractiveness."
+  ]
+}

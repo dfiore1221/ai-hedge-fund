@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
 DOCS_DIR = PROJECT_ROOT / "docs"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 MARKET_INTELLIGENCE_REPORT = PROJECT_ROOT / "reports" / "market_intelligence" / "daily_market_intelligence.md"
+MACRO_SCORING_RULES_PATH = PROJECT_ROOT / "framework" / "macro_scoring_rules.json"
 
 
 def get_openai_api_key():
@@ -79,6 +81,16 @@ def load_market_intelligence_context(max_chars=6000):
     }
 
 
+def load_macro_scoring_rules():
+    if not MACRO_SCORING_RULES_PATH.exists():
+        return {
+            "status": "missing",
+            "message": "No macro scoring rules found.",
+        }
+
+    return json.loads(MACRO_SCORING_RULES_PATH.read_text(encoding="utf-8"))
+
+
 def build_research_prompt(
     ticker,
     fund_docs,
@@ -88,6 +100,7 @@ def build_research_prompt(
     sec_filing_evidence,
     research_memory,
     market_intelligence,
+    macro_scoring_rules,
 ):
     return f"""
 You are the first Research Analyst Agent for an AI Hedge Fund.
@@ -114,6 +127,9 @@ Research Memory:
 
 Market Intelligence Context:
 {market_intelligence}
+
+Macro-Aware Scoring Rules:
+{macro_scoring_rules}
 
 Task:
 Analyze the company with ticker: {ticker}
@@ -144,14 +160,18 @@ Use this exact structure:
    - Risk: 0-100, where higher means lower risk
    - Catalyst Strength: 0-100
    - Overall Research Score: 0-100
-7. Why This Company Might Be Attractive
-8. Main Risks
-9. Key SEC Filing Signals
+7. Macro-Aware Score Adjustments
+   - State which scorecard categories were affected by the current market regime.
+   - Explain whether valuation, risk, catalyst strength, or final rating became more conservative or more permissive.
+   - Do not let macro context override primary company evidence.
+8. Why This Company Might Be Attractive
+9. Main Risks
+10. Key SEC Filing Signals
    - Use the primary SEC filing evidence when available.
    - Name the filing form and filing date behind important claims.
-10. What Data We Still Need
-11. Recommended Next Step
-12. Final Rating: Reject / Watchlist / Deep Research Candidate
+11. What Data We Still Need
+12. Recommended Next Step
+13. Final Rating: Reject / Watchlist / Deep Research Candidate
 
 Rules:
 - Be clear enough for a beginner but rigorous enough for an investment committee.
@@ -160,6 +180,8 @@ Rules:
 - Prefer Verified SEC Financial Facts over Yahoo Finance or other secondary fields when calculating financial strength, free cash flow, net cash/debt, or margins.
 - Use Research Memory to compare the new analysis against prior stored reports.
 - If Market Intelligence Context is available, incorporate it before making any company-level conclusion.
+- Apply Macro-Aware Scoring Rules when interpreting valuation, risk, catalyst strength, and final rating.
+- Separate business quality from current market/trade attractiveness.
 - Do not treat prior reports as truth. Treat them as historical analyst views to confirm, update, or reject.
 - Avoid false precision. Explain every score in plain English.
 - Do not recommend a trade yet. This is company research only.
@@ -177,6 +199,7 @@ def research_company(ticker):
     sec_filing_evidence = get_latest_filing_evidence(ticker)
     research_memory = build_research_memory_context(ticker)
     market_intelligence = load_market_intelligence_context()
+    macro_scoring_rules = load_macro_scoring_rules()
     prompt = build_research_prompt(
         ticker,
         fund_docs,
@@ -186,6 +209,7 @@ def research_company(ticker):
         sec_filing_evidence,
         research_memory,
         market_intelligence,
+        macro_scoring_rules,
     )
 
     client = OpenAI()
