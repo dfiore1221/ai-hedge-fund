@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "description": "Default watchlist for daily watch-only morning brief scans.",
+  "symbols": [
+    "MSFT",
+    "NVDA",
+    "GOOGL",
+    "AMZN",
+    "META",
+    "AAPL",
+    "AMD",
+    "AVGO",
+    "TSLA",
+    "QQQ",
+    "SPY",
+    "SMH"
+  ]
+}

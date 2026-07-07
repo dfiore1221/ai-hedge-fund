@@ -21,10 +21,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports" / "cio"
 
 
-def create_cio_summary(ticker):
+def create_cio_summary(ticker, macro_report=None):
     ticker = ticker.upper().strip()
     run_id = build_run_id(ticker)
-    macro_report = generate_daily_market_intelligence()
+    macro_report = macro_report or generate_daily_market_intelligence()
     technical_report = analyze_technical_setup(ticker)
     risk_report = evaluate_trade_risk(ticker, technical_report=technical_report)
     memory_context = build_research_memory_context(ticker)

@@ -186,6 +186,27 @@ def macro(period):
     print(f"Saved market intelligence report to: {output_path}")
 
 
+def morning(period):
+    if period.lower() != "today":
+        raise ValueError("Morning command currently supports: today")
+
+    try:
+        from agents.morning_brief import (
+            create_morning_brief,
+            format_morning_brief,
+            save_morning_brief,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    report = create_morning_brief()
+    output_path = save_morning_brief(report)
+    print(format_morning_brief(report))
+    print(f"Saved morning brief to: {output_path}")
+
+
 def technical(ticker):
     try:
         from agents.technical_analyst import (
@@ -291,6 +312,7 @@ def cio(ticker):
 def main():
     if len(sys.argv) < 3:
         print("Usage:")
+        print("  python3 main.py morning today")
         print("  python3 main.py macro today")
         print("  python3 main.py technical MSFT")
         print("  python3 main.py risk MSFT")
@@ -313,6 +335,8 @@ def main():
     try:
         if command == "analyze":
             analyze(ticker)
+        elif command == "morning":
+            morning(ticker)
         elif command == "macro":
             macro(ticker)
         elif command == "technical":

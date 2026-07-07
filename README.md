@@ -5,6 +5,7 @@ An early-stage research operating system for generating investment-grade company
 ## Current Workflow
 
 ```bash
+python3 main.py morning today
 python3 main.py macro today
 python3 main.py earnings MSFT
 python3 main.py portfolio MSFT
@@ -19,6 +20,15 @@ python3 main.py history MSFT
 python3 main.py thesis MSFT
 python3 main.py facts MSFT
 ```
+
+The `morning today` command:
+
+1. Runs one shared daily macro read.
+2. Scans the default watchlist in `framework/watchlist.json`.
+3. Runs the CIO committee process for each symbol.
+4. Ranks a short list of stocks or ETFs worth reviewing.
+5. Keeps the output watch-only unless Risk approves a paper-trade candidate.
+6. Saves the daily brief in `reports/morning_brief/`.
 
 The `macro today` command:
 
