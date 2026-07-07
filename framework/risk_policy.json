@@ -1,0 +1,36 @@
+{
+  "version": "1.0",
+  "paper_account_size": 100000,
+  "max_risk_per_trade_pct": 0.005,
+  "max_single_position_pct": 0.10,
+  "minimum_reward_to_risk": 1.5,
+  "max_correlated_ai_semi_positions": 3,
+  "ai_semi_correlated_symbols": [
+    "NVDA",
+    "AMD",
+    "AVGO",
+    "TSM",
+    "ASML",
+    "AMAT",
+    "LRCX",
+    "KLAC",
+    "MU",
+    "MRVL",
+    "ANET",
+    "MSFT",
+    "GOOGL",
+    "AMZN",
+    "META",
+    "SMH",
+    "SOXX",
+    "QQQ"
+  ],
+  "veto_triggers": [
+    "Missing entry, stop, or target",
+    "Reward-to-risk below minimum",
+    "Invalid stop relative to entry",
+    "Position value above max single-position exposure",
+    "Technical agent stance is no_trade",
+    "No reliable data for symbol"
+  ]
+}

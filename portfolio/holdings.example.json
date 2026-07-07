@@ -1,0 +1,13 @@
+{
+  "account_name": "paper",
+  "cash": 100000,
+  "positions": [
+    {
+      "symbol": "QQQ",
+      "quantity": 0,
+      "cost_basis": 0,
+      "last_price": 0,
+      "notes": "Example only. Copy to holdings.json for local use."
+    }
+  ]
+}

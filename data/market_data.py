@@ -114,6 +114,33 @@ def get_price_history(ticker, period="3mo"):
     }
 
 
+def get_ohlcv_history(ticker, period="6mo"):
+    try:
+        history = yf.Ticker(ticker).history(period=period, auto_adjust=True)
+    except Exception as exc:
+        return {"ticker": ticker, "error": str(exc), "rows": []}
+
+    if history is None or history.empty:
+        return {"ticker": ticker, "error": "No OHLCV history returned.", "rows": []}
+
+    rows = []
+    for index, row in history.dropna(subset=["Close"]).iterrows():
+        rows.append({
+            "date": str(index.date()),
+            "open": float(row["Open"]),
+            "high": float(row["High"]),
+            "low": float(row["Low"]),
+            "close": float(row["Close"]),
+            "volume": int(row["Volume"]) if not row.isna()["Volume"] else None,
+        })
+
+    return {
+        "ticker": ticker.upper(),
+        "period": period,
+        "rows": rows,
+    }
+
+
 def get_macro_market_snapshot():
     return {
         name: get_price_history(ticker)

@@ -129,6 +129,42 @@ def facts(ticker):
     print(format_structured_financial_facts(get_structured_financial_facts(ticker)))
 
 
+def earnings(ticker):
+    try:
+        from data.earnings_calendar import format_earnings_calendar, get_earnings_calendar
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    ticker = normalize_ticker(ticker)
+    print(format_earnings_calendar(get_earnings_calendar(ticker)))
+
+
+def portfolio(ticker):
+    try:
+        from data.portfolio import (
+            analyze_portfolio_exposure,
+            format_portfolio_exposure,
+            save_default_portfolio,
+        )
+        from agents.risk_manager import load_risk_policy
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    ticker = normalize_ticker(ticker)
+    save_default_portfolio()
+    policy = load_risk_policy()
+    print(format_portfolio_exposure(
+        analyze_portfolio_exposure(
+            ticker,
+            correlated_symbols=policy["ai_semi_correlated_symbols"],
+        )
+    ))
+
+
 def macro(period):
     if period.lower() != "today":
         raise ValueError("Macro command currently supports: today")
@@ -150,10 +186,120 @@ def macro(period):
     print(f"Saved market intelligence report to: {output_path}")
 
 
+def technical(ticker):
+    try:
+        from agents.technical_analyst import (
+            analyze_technical_setup,
+            format_technical_report,
+            save_technical_report,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    ticker = normalize_ticker(ticker)
+    report = analyze_technical_setup(ticker)
+    output_path = save_technical_report(report)
+    print(format_technical_report(report))
+    print(f"Saved technical report to: {output_path}")
+
+
+def risk(ticker):
+    try:
+        from agents.risk_manager import (
+            evaluate_trade_risk,
+            format_risk_report,
+            save_risk_report,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    ticker = normalize_ticker(ticker)
+    report = evaluate_trade_risk(ticker)
+    output_path = save_risk_report(report)
+    print(format_risk_report(report))
+    print(f"Saved risk report to: {output_path}")
+
+
+def options(ticker):
+    try:
+        from agents.options_flow import analyze_options_flow, format_options_report, save_options_report
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    ticker = normalize_ticker(ticker)
+    report = analyze_options_flow(ticker)
+    output_path = save_options_report(report)
+    print(format_options_report(report))
+    print(f"Saved options report to: {output_path}")
+
+
+def news(ticker):
+    try:
+        from agents.news_intelligence import collect_overnight_news, format_news_report, save_news_report
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    ticker = normalize_ticker(ticker)
+    report = collect_overnight_news(ticker)
+    output_path = save_news_report(report)
+    print(format_news_report(report))
+    print(f"Saved news report to: {output_path}")
+
+
+def backtest(ticker):
+    try:
+        from agents.quant_researcher import (
+            backtest_sma_trend_strategy,
+            format_backtest_report,
+            save_backtest_report,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    ticker = normalize_ticker(ticker)
+    report = backtest_sma_trend_strategy(ticker)
+    output_path = save_backtest_report(report)
+    print(format_backtest_report(report))
+    print(f"Saved backtest report to: {output_path}")
+
+
+def cio(ticker):
+    try:
+        from agents.cio import create_cio_summary, format_cio_report, save_cio_report
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    ticker = normalize_ticker(ticker)
+    report = create_cio_summary(ticker)
+    output_path = save_cio_report(report)
+    print(format_cio_report(report))
+    print(f"Saved CIO summary to: {output_path}")
+
+
 def main():
     if len(sys.argv) < 3:
         print("Usage:")
         print("  python3 main.py macro today")
+        print("  python3 main.py technical MSFT")
+        print("  python3 main.py risk MSFT")
+        print("  python3 main.py cio MSFT")
+        print("  python3 main.py earnings MSFT")
+        print("  python3 main.py portfolio MSFT")
+        print("  python3 main.py options MSFT")
+        print("  python3 main.py news MSFT")
+        print("  python3 main.py backtest MSFT")
         print("  python3 main.py analyze MSFT")
         print("  python3 main.py history MSFT")
         print("  python3 main.py thesis MSFT")
@@ -169,6 +315,22 @@ def main():
             analyze(ticker)
         elif command == "macro":
             macro(ticker)
+        elif command == "technical":
+            technical(ticker)
+        elif command == "risk":
+            risk(ticker)
+        elif command == "cio":
+            cio(ticker)
+        elif command == "earnings":
+            earnings(ticker)
+        elif command == "portfolio":
+            portfolio(ticker)
+        elif command == "options":
+            options(ticker)
+        elif command == "news":
+            news(ticker)
+        elif command == "backtest":
+            backtest(ticker)
         elif command == "history":
             history(ticker)
         elif command == "thesis":

@@ -1,5 +1,6 @@
 import sqlite3
 import re
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -32,6 +33,19 @@ def init_db():
             confidence REAL,
             thesis TEXT,
             open_questions TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS agent_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            agent_name TEXT NOT NULL,
+            symbol TEXT,
+            created_at TEXT NOT NULL,
+            stance TEXT,
+            confidence REAL,
+            output_json TEXT NOT NULL
         )
     """)
 
@@ -219,6 +233,74 @@ def get_ticker_thesis(ticker):
         "thesis": thesis,
         "open_questions": open_questions,
     }
+
+
+def save_agent_report(run_id, agent_name, output, symbol=None, stance=None, confidence=None):
+    init_db()
+
+    if symbol is None:
+        symbol = output.get("symbol") or output.get("ticker")
+    if stance is None:
+        stance = output.get("stance") or output.get("decision") or output.get("market_regime")
+    if confidence is None:
+        confidence = output.get("confidence") or output.get("confidence_score")
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO agent_reports (
+            run_id,
+            agent_name,
+            symbol,
+            created_at,
+            stance,
+            confidence,
+            output_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        run_id,
+        agent_name,
+        symbol.upper() if symbol else None,
+        datetime.now().isoformat(),
+        stance,
+        confidence,
+        json.dumps(output, default=str),
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def get_agent_reports_for_run(run_id):
+    init_db()
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT agent_name, symbol, created_at, stance, confidence, output_json
+        FROM agent_reports
+        WHERE run_id = ?
+        ORDER BY id
+    """, (run_id,))
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    reports = []
+    for agent_name, symbol, created_at, stance, confidence, output_json in rows:
+        reports.append({
+            "agent_name": agent_name,
+            "symbol": symbol,
+            "created_at": created_at,
+            "stance": stance,
+            "confidence": confidence,
+            "output": json.loads(output_json),
+        })
+
+    return reports
 
 
 def extract_final_rating(memo):

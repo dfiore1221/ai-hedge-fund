@@ -6,6 +6,14 @@ An early-stage research operating system for generating investment-grade company
 
 ```bash
 python3 main.py macro today
+python3 main.py earnings MSFT
+python3 main.py portfolio MSFT
+python3 main.py technical MSFT
+python3 main.py options MSFT
+python3 main.py news MSFT
+python3 main.py backtest MSFT
+python3 main.py risk MSFT
+python3 main.py cio MSFT
 python3 main.py analyze MSFT
 python3 main.py history MSFT
 python3 main.py thesis MSFT
@@ -18,6 +26,31 @@ The `macro today` command:
 2. Ranks sector ETFs versus SPY.
 3. Produces a macro score, market regime, confidence score, and sector rotation table.
 4. Saves the report in `reports/market_intelligence/`.
+
+The `technical` command:
+
+1. Pulls daily OHLCV history.
+2. Calculates moving averages, RSI, MACD, ATR, support/resistance, and relative strength vs SPY.
+3. Produces entry trigger, stop/invalidation, targets, reward/risk, stance, confidence, risks, and missing information.
+4. Saves the report in `reports/technical/`.
+
+The `risk` command:
+
+1. Reads the technical setup, earnings calendar, and portfolio exposure for a ticker.
+2. Validates entry, stop, target, reward-to-risk, earnings proximity, and correlated exposure.
+3. Calculates paper position size from the risk policy.
+4. Issues vetoes, warnings, missing information, or approval for paper trade.
+5. Saves the report in `reports/risk/`.
+
+The `cio` command:
+
+1. Runs Macro, Technical, Risk, news, options, backtest, and memory/thesis context.
+2. Logs each agent's structured output to local memory.
+3. Generates a conflict memo when agents disagree.
+4. Runs a Devil's Advocate countercase to challenge the setup.
+5. Respects Risk Manager vetoes.
+6. Produces one pre-market decision: paper trade, watch only, or no trade.
+7. Saves the report in `reports/cio/`.
 
 Company research reads the latest market-intelligence report when available, so the preferred workflow is:
 

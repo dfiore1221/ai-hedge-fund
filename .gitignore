@@ -9,3 +9,12 @@ venv/
 companies/
 reports/validation/
 reports/market_intelligence/
+reports/technical/
+reports/risk/
+reports/cio/
+reports/conflicts/
+reports/devils_advocate/
+reports/options/
+reports/news/
+reports/backtests/
+portfolio/holdings.json
