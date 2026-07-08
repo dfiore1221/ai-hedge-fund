@@ -24,11 +24,13 @@ python3 main.py facts MSFT
 The `morning today` command:
 
 1. Runs one shared daily macro read.
-2. Scans the default watchlist in `framework/watchlist.json`.
+2. Scans the categorized default watchlist in `framework/watchlist.json`.
 3. Runs the CIO committee process for each symbol.
-4. Ranks a short list of stocks or ETFs worth reviewing.
-5. Keeps the output watch-only unless Risk approves a paper-trade candidate.
-6. Saves the daily brief in `reports/morning_brief/`.
+4. Splits names into Approved Simulated Trades, Worth Watching, and Rejected / Avoid Today.
+5. Prints only the top 10 names per section while preserving the full scan in the saved report object.
+6. Summarizes results by category, including AI semiconductors, nuclear/power, space, quantum, healthcare, critical materials, and energy.
+7. Keeps the output watch-only unless Risk approves a paper-trade candidate.
+8. Saves the daily brief in `reports/morning_brief/`.
 
 The `macro today` command:
 

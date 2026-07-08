@@ -11,38 +11,91 @@ from agents.market_intelligence import generate_daily_market_intelligence
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WATCHLIST_PATH = PROJECT_ROOT / "framework" / "watchlist.json"
 REPORTS_DIR = PROJECT_ROOT / "reports" / "morning_brief"
+DEFAULT_TOP_N = 10
+
+
+def load_watchlist_entries():
+    if not WATCHLIST_PATH.exists():
+        return [
+            {"symbol": "MSFT", "display_symbol": "MSFT", "category": "AI Platforms"},
+            {"symbol": "NVDA", "display_symbol": "NVDA", "category": "AI Semiconductors"},
+            {"symbol": "GOOGL", "display_symbol": "GOOGL", "category": "AI Platforms"},
+            {"symbol": "AMZN", "display_symbol": "AMZN", "category": "AI Platforms"},
+            {"symbol": "META", "display_symbol": "META", "category": "AI Platforms"},
+            {"symbol": "QQQ", "display_symbol": "QQQ", "category": "ETF"},
+            {"symbol": "SPY", "display_symbol": "SPY", "category": "ETF"},
+        ]
+
+    data = json.loads(WATCHLIST_PATH.read_text(encoding="utf-8"))
+    entries = []
+
+    for item in data.get("symbols", []):
+        if isinstance(item, str):
+            symbol = item.upper().strip()
+            if symbol:
+                entries.append({
+                    "symbol": symbol,
+                    "display_symbol": symbol,
+                    "category": "Uncategorized",
+                })
+            continue
+
+        symbol = item.get("symbol", "").upper().strip()
+        if not symbol:
+            continue
+        entries.append({
+            "symbol": symbol,
+            "display_symbol": item.get("display_symbol", symbol).upper().strip(),
+            "category": item.get("category", "Uncategorized"),
+            "notes": item.get("notes"),
+        })
+
+    return entries
 
 
 def load_watchlist():
-    if not WATCHLIST_PATH.exists():
-        return ["MSFT", "NVDA", "GOOGL", "AMZN", "META", "QQQ", "SPY"]
-
-    data = json.loads(WATCHLIST_PATH.read_text(encoding="utf-8"))
-    symbols = data.get("symbols", [])
-    return [symbol.upper().strip() for symbol in symbols if symbol.strip()]
+    return [entry["symbol"] for entry in load_watchlist_entries()]
 
 
-def create_morning_brief(symbols=None, max_ideas=5):
-    symbols = symbols or load_watchlist()
+def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
+    entries = build_entries(symbols)
+    symbols = [entry["symbol"] for entry in entries]
+    metadata_by_symbol = {entry["symbol"]: entry for entry in entries}
     macro_report = generate_daily_market_intelligence()
     summaries = []
 
     for symbol in symbols:
         try:
-            summaries.append(run_committee_scan(symbol, macro_report))
+            summary = run_committee_scan(symbol, macro_report)
         except Exception as exc:
-            summaries.append(build_error_summary(symbol, exc, macro_report))
+            summary = build_error_summary(symbol, exc, macro_report)
+        summary["watchlist"] = metadata_by_symbol.get(symbol, {
+            "symbol": symbol,
+            "display_symbol": symbol,
+            "category": "Uncategorized",
+        })
+        summaries.append(summary)
 
     ranked = sorted(
-        [
-            summary
-            for summary in summaries
-            if not summary.get("error") and is_review_candidate(summary)
-        ],
+        [summary for summary in summaries if not summary.get("error")],
         key=score_candidate,
         reverse=True,
     )
-    ideas = ranked[:max_ideas]
+    approved = [
+        summary
+        for summary in ranked
+        if summary.get("final_decision", {}).get("status") == "PAPER TRADE ONLY"
+    ]
+    watch = [
+        summary
+        for summary in ranked
+        if summary.get("final_decision", {}).get("status") == "WATCH ONLY"
+    ]
+    rejected = [
+        summary
+        for summary in ranked
+        if summary.get("final_decision", {}).get("status") == "NO TRADE"
+    ]
 
     return {
         "agent": "Morning Brief",
@@ -50,10 +103,31 @@ def create_morning_brief(symbols=None, max_ideas=5):
         "mode": "watch_only",
         "macro": macro_report,
         "symbols_scanned": symbols,
-        "ideas": [summarize_idea(summary) for summary in ideas],
+        "top_n": max_ideas,
+        "approved_simulated_trades": [summarize_idea(summary) for summary in approved[:max_ideas]],
+        "worth_watching": [summarize_idea(summary) for summary in watch[:max_ideas]],
+        "rejected_or_avoid": [summarize_idea(summary) for summary in rejected[:max_ideas]],
+        "ideas": [summarize_idea(summary) for summary in ranked[:max_ideas]],
+        "category_summary": build_category_summary(summaries),
         "committee_summaries": summaries,
         "missing_information": collect_missing_information(summaries),
     }
+
+
+def build_entries(symbols):
+    if symbols is None:
+        return load_watchlist_entries()
+
+    entries = []
+    for symbol in symbols:
+        clean = symbol.upper().strip()
+        if clean:
+            entries.append({
+                "symbol": clean,
+                "display_symbol": clean,
+                "category": "Ad Hoc Scan",
+            })
+    return entries
 
 
 def run_committee_scan(symbol, macro_report):
@@ -143,18 +217,6 @@ def score_candidate(summary):
     return round(score, 2)
 
 
-def is_review_candidate(summary):
-    decision = summary.get("final_decision", {}).get("status")
-    technical_stance = summary.get("technical_stance")
-
-    if decision == "PAPER TRADE ONLY":
-        return True
-    if technical_stance in {"bullish", "neutral"}:
-        return True
-
-    return False
-
-
 def get_reward_to_risk(summary):
     source_reports = summary.get("source_reports") or {}
     risk = source_reports.get("risk") or {}
@@ -172,9 +234,12 @@ def summarize_idea(summary):
     risk = source_reports.get("risk") or {}
     backtest = source_reports.get("backtest") or {}
     thesis = summary.get("current_thesis") or {}
+    watchlist = summary.get("watchlist") or {}
 
     return {
         "symbol": summary["symbol"],
+        "display_symbol": watchlist.get("display_symbol", summary["symbol"]),
+        "category": watchlist.get("category", "Uncategorized"),
         "score": score_candidate(summary),
         "decision": summary["final_decision"]["status"],
         "reason": build_idea_reason(summary),
@@ -225,6 +290,37 @@ def build_idea_reason(summary):
     return "; ".join(reasons[:4])
 
 
+def build_category_summary(summaries):
+    categories = {}
+
+    for summary in summaries:
+        watchlist = summary.get("watchlist") or {}
+        category = watchlist.get("category", "Uncategorized")
+        decision = (summary.get("final_decision") or {}).get("status", "ERROR")
+
+        if category not in categories:
+            categories[category] = {
+                "category": category,
+                "symbols": 0,
+                "paper_trade": 0,
+                "watch_only": 0,
+                "no_trade": 0,
+                "errors": 0,
+            }
+
+        categories[category]["symbols"] += 1
+        if decision == "PAPER TRADE ONLY":
+            categories[category]["paper_trade"] += 1
+        elif decision == "WATCH ONLY":
+            categories[category]["watch_only"] += 1
+        elif decision == "NO TRADE":
+            categories[category]["no_trade"] += 1
+        else:
+            categories[category]["errors"] += 1
+
+    return sorted(categories.values(), key=lambda item: item["category"])
+
+
 def collect_missing_information(summaries):
     missing = []
     seen = set()
@@ -240,8 +336,8 @@ def collect_missing_information(summaries):
 
 def format_morning_brief(report):
     assessment = report["macro"]["assessment"]
-    ideas = report["ideas"]
     summaries = report["committee_summaries"]
+    top_n = report.get("top_n", DEFAULT_TOP_N)
 
     lines = [
         "# AI Hedge Fund Morning Brief",
@@ -257,45 +353,51 @@ def format_morning_brief(report):
         f"- Watch-Only Candidates: {count_decisions(summaries, 'WATCH ONLY')}",
         f"- No-Trade / Avoid Today: {count_decisions(summaries, 'NO TRADE')}",
         "",
-        "## Stocks / ETFs Worth Looking At",
+        "## Approved Simulated Trades",
     ]
 
-    if not ideas:
-        lines.append("- None today.")
-    else:
-        for index, idea in enumerate(ideas, start=1):
-            lines.append(
-                f"{index}. {idea['symbol']} - {idea['decision']} "
-                f"(score {format_number(idea['score'])})"
-            )
-            lines.append(f"   - Why: {idea['reason'] or 'No clear positive setup.'}")
-            lines.append(
-                f"   - Setup: entry {format_number(idea['entry_trigger'])}, "
-                f"stop {format_number(idea['stop'])}, target {format_number(idea['target_1'])}, "
-                f"reward/risk {format_number(idea['reward_to_risk'])}"
-            )
-            lines.append(
-                f"   - Backtest: expectancy {format_number(idea['backtest_expectancy'])}%, "
-                f"sample {idea['backtest_sample_size'] if idea['backtest_sample_size'] is not None else 'n/a'}"
-            )
+    append_idea_section(lines, report["approved_simulated_trades"], empty_text="None today.")
 
     lines.extend([
         "",
-        "## Committee Scan",
+        f"## Worth Watching (Top {top_n})",
+    ])
+    append_idea_section(
+        lines,
+        report["worth_watching"],
+        empty_text="None today.",
+        show_guardrail=True,
+    )
+
+    lines.extend([
+        "",
+        f"## Rejected / Avoid Today (Top {top_n} by Review Score)",
+    ])
+    append_idea_section(
+        lines,
+        report["rejected_or_avoid"],
+        empty_text="No rejected names surfaced.",
+        show_guardrail=True,
+    )
+
+    lines.extend([
+        "",
+        "## Category Scan",
     ])
 
-    for summary in summaries:
-        decision = summary.get("final_decision", {})
-        if summary.get("error"):
-            lines.append(f"- {summary['symbol']}: ERROR - {summary['error']}")
-            continue
-
+    for category in report.get("category_summary", []):
         lines.append(
-            f"- {summary['symbol']}: {decision.get('status')} | "
-            f"technical {summary.get('technical_stance')} | "
-            f"risk {summary.get('risk_decision')} | "
-            f"conflicts {(summary.get('conflict_memo') or {}).get('conflict_count', 0)}"
+            f"- {category['category']}: {category['symbols']} scanned | "
+            f"paper {category['paper_trade']} | watch {category['watch_only']} | "
+            f"no trade {category['no_trade']} | errors {category['errors']}"
         )
+
+    errors = [summary for summary in summaries if summary.get("error")]
+    if errors:
+        lines.extend(["", "## Symbols Needing Cleanup"])
+        for summary in errors[:top_n]:
+            display = get_display_symbol(summary)
+            lines.append(f"- {display}: {summary['error']}")
 
     lines.extend([
         "",
@@ -309,6 +411,46 @@ def format_morning_brief(report):
     lines.extend([f"- {item}" for item in report["missing_information"]] or ["- None."])
 
     return "\n".join(lines) + "\n"
+
+
+def append_idea_section(lines, ideas, empty_text, show_guardrail=False):
+    if not ideas:
+        lines.append(f"- {empty_text}")
+        return
+
+    for index, idea in enumerate(ideas, start=1):
+        label = format_idea_label(idea)
+        lines.append(
+            f"{index}. {label} - {idea['decision']} "
+            f"(score {format_number(idea['score'])}, {idea['category']})"
+        )
+        lines.append(f"   - Why: {idea['reason'] or 'No clear positive setup.'}")
+        lines.append(
+            f"   - Setup: entry {format_number(idea['entry_trigger'])}, "
+            f"stop {format_number(idea['stop'])}, target {format_number(idea['target_1'])}, "
+            f"reward/risk {format_number(idea['reward_to_risk'])}"
+        )
+        lines.append(
+            f"   - Backtest: expectancy {format_number(idea['backtest_expectancy'])}%, "
+            f"sample {idea['backtest_sample_size'] if idea['backtest_sample_size'] is not None else 'n/a'}"
+        )
+        if show_guardrail and idea["decision"] != "PAPER TRADE ONLY":
+            lines.append("   - Guardrail: review only; not approved as a simulated trade.")
+
+
+def format_idea_label(idea):
+    if idea["display_symbol"] == idea["symbol"]:
+        return idea["symbol"]
+    return f"{idea['display_symbol']} ({idea['symbol']})"
+
+
+def get_display_symbol(summary):
+    watchlist = summary.get("watchlist") or {}
+    display = watchlist.get("display_symbol", summary.get("symbol"))
+    symbol = summary.get("symbol")
+    if display == symbol:
+        return symbol
+    return f"{display} ({symbol})"
 
 
 def save_morning_brief(report):
