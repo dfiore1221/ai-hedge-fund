@@ -51,8 +51,9 @@ The `risk` command:
 1. Reads the technical setup, earnings calendar, and portfolio exposure for a ticker.
 2. Validates entry, stop, target, reward-to-risk, earnings proximity, and correlated exposure.
 3. Calculates paper position size from the risk policy.
-4. Issues vetoes, warnings, missing information, or approval for paper trade.
-5. Saves the report in `reports/risk/`.
+4. Blocks long simulated trades when Technical stance is bearish or no_trade.
+5. Issues vetoes, warnings, missing information, or approval for paper trade.
+6. Saves the report in `reports/risk/`.
 
 The `cio` command:
 

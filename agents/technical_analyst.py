@@ -119,8 +119,8 @@ def calculate_levels(rows, indicators):
     breakout_trigger = resistance * 1.005
     pullback_trigger = indicators["sma_20"] if indicators["sma_20"] else latest_close
     invalidation = max(larger_support, latest_close - (2 * atr)) if atr else larger_support
-    target_1 = latest_close + (2 * atr) if atr else larger_resistance
-    target_2 = larger_resistance
+    target_1 = breakout_trigger + (2 * atr) if atr else larger_resistance
+    target_2 = max(larger_resistance, breakout_trigger + (3 * atr)) if atr else larger_resistance
 
     return {
         "support_20d": support,
@@ -134,7 +134,7 @@ def calculate_levels(rows, indicators):
         "stop": invalidation,
         "target_1": target_1,
         "target_2": target_2,
-        "reward_to_risk_to_target_1": reward_to_risk(latest_close, invalidation, target_1),
+        "reward_to_risk_to_target_1": reward_to_risk(breakout_trigger, invalidation, target_1),
     }
 
 

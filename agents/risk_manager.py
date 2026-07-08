@@ -59,7 +59,7 @@ def evaluate_trade_risk(ticker, technical_report=None, policy=None):
     if technical_report["stance"] == "no_trade":
         vetoes.append("Technical Analyst stance is no_trade.")
     elif technical_report["stance"] == "bearish":
-        warnings.append("Technical Analyst stance is bearish.")
+        vetoes.append("Technical Analyst stance is bearish; long simulated trade is blocked.")
 
     position = calculate_position_size(entry, stop, policy)
 
