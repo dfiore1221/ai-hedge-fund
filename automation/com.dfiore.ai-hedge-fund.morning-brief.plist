@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.dfiore.ai-hedge-fund.morning-brief</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>/Users/davidfiore/Desktop/ai-hedge-fund/scripts/run_morning_email.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/davidfiore/Desktop/ai-hedge-fund</string>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>45</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/davidfiore/Desktop/ai-hedge-fund/reports/morning_brief/launchd.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/davidfiore/Desktop/ai-hedge-fund/reports/morning_brief/launchd.err.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

@@ -207,6 +207,26 @@ def morning(period):
     print(f"Saved morning brief to: {output_path}")
 
 
+def morning_email(period, dry_run=False):
+    if period.lower() != "today":
+        raise ValueError("Morning email command currently supports: today")
+
+    try:
+        from agents.morning_email import send_morning_brief_email
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    result = send_morning_brief_email(dry_run=dry_run)
+    print(result["body"])
+    print(f"Saved morning brief to: {result['report_path']}")
+    if dry_run:
+        print("Dry run complete. Email settings are present; no email was sent.")
+    else:
+        print(f"Sent morning brief email: {result['subject']}")
+
+
 def technical(ticker):
     try:
         from agents.technical_analyst import (
@@ -313,6 +333,8 @@ def main():
     if len(sys.argv) < 3:
         print("Usage:")
         print("  python3 main.py morning today")
+        print("  python3 main.py morning-email today")
+        print("  python3 main.py morning-email today --dry-run")
         print("  python3 main.py macro today")
         print("  python3 main.py technical MSFT")
         print("  python3 main.py risk MSFT")
@@ -331,12 +353,15 @@ def main():
 
     command = sys.argv[1].lower()
     ticker = sys.argv[2]
+    dry_run = "--dry-run" in sys.argv[3:]
 
     try:
         if command == "analyze":
             analyze(ticker)
         elif command == "morning":
             morning(ticker)
+        elif command == "morning-email":
+            morning_email(ticker, dry_run=dry_run)
         elif command == "macro":
             macro(ticker)
         elif command == "technical":

@@ -32,6 +32,37 @@ The `morning today` command:
 7. Keeps the output watch-only unless Risk approves a paper-trade candidate.
 8. Saves the daily brief in `reports/morning_brief/`.
 
+The `morning-email today` command:
+
+1. Runs the same morning brief.
+2. Saves the markdown report in `reports/morning_brief/`.
+3. Sends a concise email summary with the full report attached.
+4. Supports `--dry-run` to validate email settings without sending.
+
+Required `.env` fields for email delivery:
+
+```bash
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USE_TLS=true
+SMTP_USERNAME=your_email@example.com
+SMTP_PASSWORD=your_email_app_password_here
+EMAIL_FROM=your_email@example.com
+MORNING_BRIEF_EMAIL_TO=your_email@example.com
+```
+
+To schedule the email for 4:45 AM on macOS:
+
+```bash
+chmod +x scripts/run_morning_email.sh
+mkdir -p ~/Library/LaunchAgents
+cp automation/com.dfiore.ai-hedge-fund.morning-brief.plist ~/Library/LaunchAgents/
+launchctl unload ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.morning-brief.plist 2>/dev/null || true
+launchctl load ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.morning-brief.plist
+```
+
+Logs are written to `reports/morning_brief/automation.log`, `launchd.out.log`, and `launchd.err.log`.
+
 The `macro today` command:
 
 1. Pulls major index, volatility, rate, dollar, commodity, and crypto proxies.
