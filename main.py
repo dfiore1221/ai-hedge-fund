@@ -1,5 +1,6 @@
 import sys
 import re
+import subprocess
 from pathlib import Path
 
 from framework.report_validator import format_validation_report, validate_report
@@ -227,6 +228,19 @@ def morning_email(period, dry_run=False):
         print(f"Sent morning brief email: {result['subject']}")
 
 
+def dashboard(_arg=None):
+    dashboard_path = PROJECT_ROOT / "dashboard" / "app.py"
+    subprocess.run([
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(dashboard_path),
+        "--server.port",
+        "8501",
+    ], cwd=PROJECT_ROOT, check=False)
+
+
 def technical(ticker):
     try:
         from agents.technical_analyst import (
@@ -332,6 +346,7 @@ def cio(ticker):
 def main():
     if len(sys.argv) < 3:
         print("Usage:")
+        print("  python3 main.py dashboard start")
         print("  python3 main.py morning today")
         print("  python3 main.py morning-email today")
         print("  python3 main.py morning-email today --dry-run")
@@ -358,6 +373,8 @@ def main():
     try:
         if command == "analyze":
             analyze(ticker)
+        elif command == "dashboard":
+            dashboard(ticker)
         elif command == "morning":
             morning(ticker)
         elif command == "morning-email":

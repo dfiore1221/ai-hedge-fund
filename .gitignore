@@ -19,3 +19,4 @@ reports/options/
 reports/news/
 reports/backtests/
 portfolio/holdings.json
+portfolio/trade_journal.csv

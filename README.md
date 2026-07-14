@@ -5,7 +5,10 @@ An early-stage research operating system for generating investment-grade company
 ## Current Workflow
 
 ```bash
+python3 main.py dashboard start
 python3 main.py morning today
+python3 main.py morning-email today
+python3 main.py morning-email today --dry-run
 python3 main.py macro today
 python3 main.py earnings MSFT
 python3 main.py portfolio MSFT
@@ -20,6 +23,13 @@ python3 main.py history MSFT
 python3 main.py thesis MSFT
 python3 main.py facts MSFT
 ```
+
+The `dashboard start` command:
+
+1. Starts a local Streamlit dashboard at `http://localhost:8501`.
+2. Shows the latest morning brief, watchlist categories, simulated trade journal, agent debate logs, and research memory.
+3. Stores simulated trade journal entries locally in `portfolio/trade_journal.csv`.
+4. Does not place trades.
 
 The `morning today` command:
 
