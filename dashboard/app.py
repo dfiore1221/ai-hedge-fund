@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import yfinance as yf
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +48,7 @@ def main():
 
     tabs = st.tabs([
         "Morning Brief",
+        "Charts",
         "Watchlist",
         "Simulated Trades",
         "Agent Debate",
@@ -57,14 +59,16 @@ def main():
     with tabs[0]:
         render_morning_brief()
     with tabs[1]:
-        render_watchlist()
+        render_stock_charts()
     with tabs[2]:
-        render_trade_journal()
+        render_watchlist()
     with tabs[3]:
-        render_agent_debate()
+        render_trade_journal()
     with tabs[4]:
-        render_research_memory()
+        render_agent_debate()
     with tabs[5]:
+        render_research_memory()
+    with tabs[6]:
         render_settings()
 
 
@@ -120,6 +124,63 @@ def render_watchlist():
     with right:
         st.markdown("#### Symbols")
         st.dataframe(frame, hide_index=True, width="stretch")
+
+
+def render_stock_charts():
+    st.subheader("Live Stock Charts")
+    st.caption("Market data is pulled from Yahoo Finance and refreshed on demand. Charts are for research only.")
+
+    entries = load_watchlist_entries()
+    labels = [format_watchlist_label(entry) for entry in entries]
+    label_to_symbol = {format_watchlist_label(entry): entry["symbol"] for entry in entries}
+
+    controls = st.columns([2, 1, 1, 1])
+    selected_label = controls[0].selectbox("Watchlist Symbol", labels, index=0 if labels else None)
+    custom_symbol = controls[1].text_input("Custom", placeholder="e.g. SPY").upper().strip()
+    period = controls[2].selectbox("Period", ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y"], index=2)
+    interval = controls[3].selectbox("Interval", ["1m", "5m", "15m", "30m", "1h", "1d"], index=5)
+
+    symbol = custom_symbol or label_to_symbol.get(selected_label)
+    if st.button("Refresh Chart"):
+        load_chart_history.clear()
+
+    if not symbol:
+        st.info("Select a symbol to chart.")
+        return
+
+    with st.spinner(f"Loading chart for {symbol}..."):
+        history, error = load_chart_history(symbol, period, interval)
+
+    if error:
+        st.error(error)
+        return
+    if history.empty:
+        st.info(f"No chart data returned for {symbol}.")
+        return
+
+    history = history.copy()
+    history.index = pd.to_datetime(history.index)
+    latest = float(history["Close"].dropna().iloc[-1])
+    previous = float(history["Close"].dropna().iloc[-2]) if len(history["Close"].dropna()) > 1 else latest
+    change = latest - previous
+    change_pct = (change / previous) * 100 if previous else 0
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Symbol", symbol)
+    c2.metric("Last", f"{latest:.2f}", f"{change:.2f} / {change_pct:.2f}%")
+    c3.metric("Rows", len(history))
+    c4.metric("Last Update", str(history.index[-1]))
+
+    chart_data = history[["Close"]].rename(columns={"Close": symbol})
+    st.line_chart(chart_data, height=420)
+
+    with st.expander("Volume and OHLC Data"):
+        if "Volume" in history.columns:
+            st.bar_chart(history[["Volume"]], height=180)
+        st.dataframe(
+            history[["Open", "High", "Low", "Close", "Volume"]].tail(100),
+            width="stretch",
+        )
 
 
 def render_trade_journal():
@@ -281,6 +342,36 @@ def load_watchlist_entries():
                 "notes": item.get("notes", ""),
             })
     return rows
+
+
+def format_watchlist_label(entry):
+    symbol = entry.get("symbol", "")
+    display = entry.get("display_symbol") or symbol
+    category = entry.get("category", "Uncategorized")
+    if display == symbol:
+        return f"{symbol} - {category}"
+    return f"{display} ({symbol}) - {category}"
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_chart_history(symbol, period, interval):
+    try:
+        history = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=True)
+    except Exception as exc:
+        return pd.DataFrame(), f"Could not load chart data for {symbol}: {exc}"
+
+    if history is None or history.empty:
+        return pd.DataFrame(), None
+
+    required = ["Open", "High", "Low", "Close"]
+    for column in required:
+        if column not in history.columns:
+            return pd.DataFrame(), f"Chart data for {symbol} is missing {column}."
+
+    if "Volume" not in history.columns:
+        history["Volume"] = 0
+
+    return history.dropna(subset=["Close"]), None
 
 
 def load_trade_journal():
