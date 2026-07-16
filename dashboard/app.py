@@ -3,36 +3,28 @@ import re
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 import yfinance as yf
 
+from data.trade_journal import (
+    OPEN_STATUSES,
+    TRADE_JOURNAL_PATH,
+    append_trade,
+    close_trade,
+    enrich_trade_metrics,
+    load_trade_journal,
+    save_trade_journal,
+    summarize_trade_journal,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = PROJECT_ROOT / "memory" / "hedge_fund_memory.db"
 WATCHLIST_PATH = PROJECT_ROOT / "framework" / "watchlist.json"
 MORNING_BRIEF_PATH = PROJECT_ROOT / "reports" / "morning_brief" / "daily_morning_brief.md"
-TRADE_JOURNAL_PATH = PROJECT_ROOT / "portfolio" / "trade_journal.csv"
-
-TRADE_COLUMNS = [
-    "opened_at",
-    "symbol",
-    "side",
-    "status",
-    "entry",
-    "stop",
-    "target",
-    "shares",
-    "thesis",
-    "source",
-    "closed_at",
-    "exit_price",
-    "pnl",
-    "notes",
-]
 
 
 st.set_page_config(
@@ -187,28 +179,45 @@ def render_trade_journal():
     st.subheader("Simulated Trade Journal")
     st.caption("Local journal only. This does not place trades.")
 
-    journal = load_trade_journal()
-    open_trades = journal[journal["status"].str.lower() == "open"] if not journal.empty else journal
-    closed_trades = journal[journal["status"].str.lower() == "closed"] if not journal.empty else journal
+    refresh_prices = st.button("Refresh Open Trade Prices")
+    journal = enrich_trade_metrics(load_trade_journal(), refresh_prices=refresh_prices)
+    if refresh_prices:
+        save_trade_journal(journal)
+    summary = summarize_trade_journal(journal)
+    statuses = journal["status"].str.lower() if not journal.empty else pd.Series(dtype=str)
+    open_trades = journal[statuses.isin(OPEN_STATUSES)] if not journal.empty else journal
+    closed_trades = journal[statuses == "closed"] if not journal.empty else journal
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Open Simulated Trades", len(open_trades))
-    c2.metric("Closed Simulated Trades", len(closed_trades))
-    c3.metric("Tracked P&L", format_number(pd.to_numeric(journal.get("pnl"), errors="coerce").sum()))
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Open / Planned", summary["open_trades"])
+    c2.metric("Closed", summary["closed_trades"])
+    c3.metric("Realized P&L", money(summary["total_realized_pnl"]))
+    c4.metric("Unrealized P&L", money(summary["open_unrealized_pnl"]))
+    c5.metric("Open Risk", money(summary["open_planned_risk"]))
+    c6.metric("Avg R", f"{summary['avg_r_multiple']:.2f}")
+
+    st.caption(f"Win rate: {summary['win_rate']:.1f}%")
 
     with st.expander("Add Simulated Trade", expanded=False):
         with st.form("add_trade"):
             col1, col2, col3, col4 = st.columns(4)
             symbol = col1.text_input("Symbol").upper().strip()
             side = col2.selectbox("Side", ["long", "short"])
-            status = col3.selectbox("Status", ["open", "closed"])
-            source = col4.selectbox("Source", ["morning brief", "manual", "CIO", "research"])
+            status = col3.selectbox("Status", ["planned", "open"])
+            source = col4.selectbox("Source", ["morning brief", "CIO", "manual", "research"])
 
             col5, col6, col7, col8 = st.columns(4)
             entry = col5.number_input("Entry", min_value=0.0, value=0.0)
             stop = col6.number_input("Stop", min_value=0.0, value=0.0)
             target = col7.number_input("Target", min_value=0.0, value=0.0)
             shares = col8.number_input("Shares", min_value=0, value=0)
+
+            col9, col10 = st.columns(2)
+            setup_type = col9.selectbox(
+                "Setup Type",
+                ["breakout", "pullback", "trend continuation", "mean reversion", "event", "manual"],
+            )
+            agent_run_id = col10.text_input("Agent Run ID", placeholder="optional")
 
             thesis = st.text_area("Thesis / Why")
             notes = st.text_area("Notes")
@@ -219,26 +228,91 @@ def render_trade_journal():
                 st.error("Symbol is required.")
             else:
                 row = {
-                    "opened_at": datetime.now().isoformat(timespec="seconds"),
                     "symbol": symbol,
                     "side": side,
                     "status": status,
+                    "setup_type": setup_type,
+                    "source": source,
+                    "agent_run_id": agent_run_id,
                     "entry": entry,
                     "stop": stop,
                     "target": target,
                     "shares": shares,
                     "thesis": thesis,
-                    "source": source,
-                    "closed_at": "",
-                    "exit_price": "",
-                    "pnl": "",
                     "notes": notes,
                 }
-                save_trade_row(row)
+                trade_id = append_trade(row)
                 st.success(f"Saved simulated trade for {symbol}.")
+                st.caption(f"Trade ID: {trade_id}")
                 st.rerun()
 
-    st.markdown("#### Journal")
+    if not open_trades.empty:
+        with st.expander("Close Simulated Trade", expanded=False):
+            trade_labels = {
+                f"{row['id']} | {row['symbol']} | {row['side']} | entry {row['entry']}": row["id"]
+                for _, row in open_trades.iterrows()
+            }
+            with st.form("close_trade"):
+                selected = st.selectbox("Trade", list(trade_labels.keys()))
+                exit_price = st.number_input("Exit Price", min_value=0.0, value=0.0)
+                exit_reason = st.text_area("Exit Reason")
+                lessons = st.text_area("Lesson / What changed")
+                close_submitted = st.form_submit_button("Close Trade")
+
+            if close_submitted:
+                if exit_price <= 0:
+                    st.error("Exit price is required.")
+                else:
+                    close_trade(trade_labels[selected], exit_price, exit_reason, lessons)
+                    st.success("Trade closed.")
+                    st.rerun()
+
+    st.markdown("#### Open / Planned")
+    if open_trades.empty:
+        st.info("No open or planned simulated trades.")
+    else:
+        st.dataframe(
+            open_trades[[
+                "id",
+                "symbol",
+                "side",
+                "status",
+                "setup_type",
+                "entry",
+                "stop",
+                "target",
+                "shares",
+                "planned_risk",
+                "current_price",
+                "unrealized_pnl",
+                "source",
+            ]],
+            hide_index=True,
+            width="stretch",
+        )
+
+    st.markdown("#### Closed")
+    if closed_trades.empty:
+        st.info("No closed simulated trades yet.")
+    else:
+        st.dataframe(
+            closed_trades[[
+                "id",
+                "symbol",
+                "side",
+                "entry",
+                "exit_price",
+                "shares",
+                "realized_pnl",
+                "r_multiple",
+                "outcome",
+                "exit_reason",
+            ]],
+            hide_index=True,
+            width="stretch",
+        )
+
+    st.markdown("#### Full Journal")
     edited = st.data_editor(
         journal,
         hide_index=True,
@@ -374,30 +448,6 @@ def load_chart_history(symbol, period, interval):
     return history.dropna(subset=["Close"]), None
 
 
-def load_trade_journal():
-    TRADE_JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if not TRADE_JOURNAL_PATH.exists():
-        frame = pd.DataFrame(columns=TRADE_COLUMNS)
-        frame.to_csv(TRADE_JOURNAL_PATH, index=False)
-        return frame
-    frame = pd.read_csv(TRADE_JOURNAL_PATH, dtype=str).fillna("")
-    for column in TRADE_COLUMNS:
-        if column not in frame.columns:
-            frame[column] = ""
-    return frame[TRADE_COLUMNS]
-
-
-def save_trade_row(row):
-    journal = load_trade_journal()
-    journal = pd.concat([journal, pd.DataFrame([row])], ignore_index=True)
-    save_trade_journal(journal)
-
-
-def save_trade_journal(frame):
-    TRADE_JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(TRADE_JOURNAL_PATH, index=False)
-
-
 def load_agent_reports():
     if not DB_PATH.exists():
         return pd.DataFrame()
@@ -469,6 +519,10 @@ def format_number(value):
         return f"{float(value):.2f}"
     except (TypeError, ValueError):
         return "0.00"
+
+
+def money(value):
+    return f"${format_number(value)}"
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ python3 main.py morning-email today --dry-run
 python3 main.py macro today
 python3 main.py earnings MSFT
 python3 main.py portfolio MSFT
+python3 main.py journal summary
 python3 main.py technical MSFT
 python3 main.py options MSFT
 python3 main.py news MSFT
@@ -29,7 +30,15 @@ The `dashboard start` command:
 1. Starts a local Streamlit dashboard at `http://localhost:8501`.
 2. Shows the latest morning brief, watchlist categories, simulated trade journal, agent debate logs, and research memory.
 3. Stores simulated trade journal entries locally in `portfolio/trade_journal.csv`.
-4. Does not place trades.
+4. Tracks planned/open/closed simulated trades, setup type, source, entry, stop, target, shares, planned risk, live price refresh, unrealized P&L, realized P&L, R-multiple, outcome, exit reason, and lessons learned.
+5. Keeps local trade notes out of Git.
+6. Does not place trades.
+
+The `journal summary` command:
+
+1. Reads the local simulated trade journal.
+2. Calculates open trades, closed trades, realized P&L, unrealized P&L, open planned risk, win rate, and average R.
+3. Supports the future feedback loop where CIO and Risk can compare recommendations against simulated outcomes.
 
 The `morning today` command:
 

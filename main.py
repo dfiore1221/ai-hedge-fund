@@ -166,6 +166,24 @@ def portfolio(ticker):
     ))
 
 
+def journal(action):
+    if action.lower() != "summary":
+        raise ValueError("Journal command currently supports: summary")
+
+    try:
+        from data.trade_journal import (
+            format_trade_journal_summary,
+            load_trade_journal,
+            summarize_trade_journal,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    print(format_trade_journal_summary(summarize_trade_journal(load_trade_journal())))
+
+
 def macro(period):
     if period.lower() != "today":
         raise ValueError("Macro command currently supports: today")
@@ -356,6 +374,7 @@ def main():
         print("  python3 main.py cio MSFT")
         print("  python3 main.py earnings MSFT")
         print("  python3 main.py portfolio MSFT")
+        print("  python3 main.py journal summary")
         print("  python3 main.py options MSFT")
         print("  python3 main.py news MSFT")
         print("  python3 main.py backtest MSFT")
@@ -391,6 +410,8 @@ def main():
             earnings(ticker)
         elif command == "portfolio":
             portfolio(ticker)
+        elif command == "journal":
+            journal(ticker)
         elif command == "options":
             options(ticker)
         elif command == "news":
