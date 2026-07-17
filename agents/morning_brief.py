@@ -62,7 +62,7 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
     entries = build_entries(symbols)
     symbols = [entry["symbol"] for entry in entries]
     metadata_by_symbol = {entry["symbol"]: entry for entry in entries}
-    data_health = generate_data_health_report(symbols=symbols, live_checks=False)
+    data_health = generate_data_health_report(symbols=symbols, live_checks=True)
     macro_report = generate_daily_market_intelligence()
     summaries = []
 
