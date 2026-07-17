@@ -18,5 +18,6 @@ reports/morning_brief/
 reports/options/
 reports/news/
 reports/backtests/
+reports/feedback/
 portfolio/holdings.json
 portfolio/trade_journal.csv

@@ -61,6 +61,8 @@ def format_email_ideas(ideas, empty_text):
             f"- {label}: {idea['decision']} | {idea['category']} | "
             f"score {format_number(idea['score'])} | R/R {format_number(idea['reward_to_risk'])}"
         )
+        if idea.get("run_id"):
+            lines.append(f"  Run ID: {idea['run_id']}")
         lines.append(f"  Why: {idea['reason'] or 'No clear positive setup.'}")
 
     return lines

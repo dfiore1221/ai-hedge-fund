@@ -184,6 +184,27 @@ def journal(action):
     print(format_trade_journal_summary(summarize_trade_journal(load_trade_journal())))
 
 
+def feedback(action):
+    if action.lower() != "summary":
+        raise ValueError("Feedback command currently supports: summary")
+
+    try:
+        from agents.feedback_loop import (
+            format_feedback_report,
+            generate_feedback_report,
+            save_feedback_report,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    report = generate_feedback_report()
+    output_path = save_feedback_report(report)
+    print(format_feedback_report(report))
+    print(f"Saved feedback report to: {output_path}")
+
+
 def macro(period):
     if period.lower() != "today":
         raise ValueError("Macro command currently supports: today")
@@ -375,6 +396,7 @@ def main():
         print("  python3 main.py earnings MSFT")
         print("  python3 main.py portfolio MSFT")
         print("  python3 main.py journal summary")
+        print("  python3 main.py feedback summary")
         print("  python3 main.py options MSFT")
         print("  python3 main.py news MSFT")
         print("  python3 main.py backtest MSFT")
@@ -412,6 +434,8 @@ def main():
             portfolio(ticker)
         elif command == "journal":
             journal(ticker)
+        elif command == "feedback":
+            feedback(ticker)
         elif command == "options":
             options(ticker)
         elif command == "news":

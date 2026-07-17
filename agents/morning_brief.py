@@ -262,6 +262,7 @@ def summarize_idea(summary):
 
     return {
         "symbol": summary["symbol"],
+        "run_id": summary.get("run_id"),
         "display_symbol": watchlist.get("display_symbol", summary["symbol"]),
         "category": watchlist.get("category", "Uncategorized"),
         "score": score_candidate(summary),
@@ -480,6 +481,8 @@ def append_idea_section(lines, ideas, empty_text, show_guardrail=False):
             f"(score {format_number(idea['score'])}, {idea['category']})"
         )
         lines.append(f"   - Why: {idea['reason'] or 'No clear positive setup.'}")
+        if idea.get("run_id"):
+            lines.append(f"   - Run ID: {idea['run_id']}")
         lines.append(
             f"   - Setup: entry {format_number(idea['entry_trigger'])}, "
             f"suggested {format_number(idea.get('suggested_entry'))}, "

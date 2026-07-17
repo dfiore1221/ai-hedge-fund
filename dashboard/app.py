@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
+from agents.feedback_loop import generate_feedback_report
 from data.trade_journal import (
     OPEN_STATUSES,
     TRADE_JOURNAL_PATH,
@@ -43,6 +44,7 @@ def main():
         "Charts",
         "Watchlist",
         "Simulated Trades",
+        "Feedback Loop",
         "Agent Debate",
         "Research Memory",
         "Settings",
@@ -57,10 +59,12 @@ def main():
     with tabs[3]:
         render_trade_journal()
     with tabs[4]:
-        render_agent_debate()
+        render_feedback_loop()
     with tabs[5]:
-        render_research_memory()
+        render_agent_debate()
     with tabs[6]:
+        render_research_memory()
+    with tabs[7]:
         render_settings()
 
 
@@ -344,6 +348,52 @@ def render_agent_debate():
         label = f"{row['created_at']} | {row['symbol']} | {row['agent_name']}"
         with st.expander(label):
             st.json(row["output"])
+
+
+def render_feedback_loop():
+    st.subheader("Decision Feedback Loop")
+    st.caption("Scores simulated outcomes against setup type, source, decision tier, and linked agent calls.")
+
+    report = generate_feedback_report()
+    expectancy = report["trade_expectancy"]
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Closed Trades", report["closed_trades_count"])
+    c2.metric("Linked Decisions", report["linked_trades_count"])
+    c3.metric("Win Rate", f"{expectancy['win_rate']:.1f}%")
+    c4.metric("Avg R", f"{expectancy['avg_r']:.2f}")
+    c5.metric("Total R", f"{expectancy['total_r']:.2f}")
+    c6.metric("Total P&L", money(expectancy["total_pnl"]))
+
+    st.markdown("#### Agent Scorecard")
+    agent_scorecard = pd.DataFrame(report["agent_scorecard"])
+    if agent_scorecard.empty:
+        st.info("No linked closed trades yet. Add agent run IDs to journal entries and close trades to score agents.")
+    else:
+        st.dataframe(agent_scorecard, hide_index=True, width="stretch")
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("#### By Setup Type")
+        st.dataframe(pd.DataFrame(report["by_setup_type"]), hide_index=True, width="stretch")
+        st.markdown("#### By Source")
+        st.dataframe(pd.DataFrame(report["by_source"]), hide_index=True, width="stretch")
+    with right:
+        st.markdown("#### By Decision Tier")
+        st.dataframe(pd.DataFrame(report["by_decision_tier"]), hide_index=True, width="stretch")
+        st.markdown("#### By Symbol")
+        st.dataframe(pd.DataFrame(report["by_symbol"]), hide_index=True, width="stretch")
+
+    st.markdown("#### Lessons")
+    lessons = pd.DataFrame(report["lessons"])
+    if lessons.empty:
+        st.info("No lessons logged yet.")
+    else:
+        st.dataframe(lessons, hide_index=True, width="stretch")
+
+    st.markdown("#### Missing Information")
+    for item in report["missing_information"]:
+        st.write(f"- {item}")
 
 
 def render_research_memory():

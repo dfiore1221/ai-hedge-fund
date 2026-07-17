@@ -13,6 +13,7 @@ python3 main.py macro today
 python3 main.py earnings MSFT
 python3 main.py portfolio MSFT
 python3 main.py journal summary
+python3 main.py feedback summary
 python3 main.py technical MSFT
 python3 main.py options MSFT
 python3 main.py news MSFT
@@ -39,6 +40,14 @@ The `journal summary` command:
 1. Reads the local simulated trade journal.
 2. Calculates open trades, closed trades, realized P&L, unrealized P&L, open planned risk, win rate, and average R.
 3. Supports the future feedback loop where CIO and Risk can compare recommendations against simulated outcomes.
+
+The `feedback summary` command:
+
+1. Reads closed simulated trades from the local trade journal.
+2. Groups realized outcomes by setup type, source, symbol, and decision tier.
+3. Uses `agent_run_id` to connect trades back to the CIO committee run when available.
+4. Scores linked agent calls against trade outcomes so Technical, Risk, CIO, Macro, Options, and Quant can be evaluated over time.
+5. Saves a local decision feedback report in `reports/feedback/`.
 
 The `morning today` command:
 

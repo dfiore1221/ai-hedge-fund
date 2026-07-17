@@ -14,7 +14,7 @@ from agents.options_flow import analyze_options_flow
 from agents.quant_researcher import backtest_sma_trend_strategy
 from agents.risk_manager import evaluate_trade_risk
 from agents.technical_analyst import analyze_technical_setup
-from memory.research_memory import build_research_memory_context
+from memory.research_memory import build_research_memory_context, save_agent_report
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -67,7 +67,7 @@ def create_cio_summary(ticker, macro_report=None):
         devils_advocate,
     )
 
-    return {
+    result = {
         "agent": "Chief Investment Officer",
         "run_id": run_id,
         "symbol": ticker,
@@ -92,6 +92,15 @@ def create_cio_summary(ticker, macro_report=None):
         "missing_information": missing_information,
         "source_reports": agent_outputs,
     }
+    save_agent_report(
+        run_id=run_id,
+        agent_name=result["agent"],
+        output=result,
+        symbol=ticker,
+        stance=decision["status"],
+        confidence=decision["confidence"],
+    )
+    return result
 
 
 def determine_final_decision(macro_report, technical_report, risk_report, memory_context):
