@@ -13,6 +13,7 @@ import yfinance as yf
 from dotenv import load_dotenv
 
 from agents.feedback_loop import generate_feedback_report
+from data.data_quality import generate_data_health_report
 from data.trade_journal import (
     OPEN_STATUSES,
     TRADE_JOURNAL_PATH,
@@ -50,6 +51,7 @@ def main():
 
     tabs = st.tabs([
         "Morning Brief",
+        "Data Quality",
         "Charts",
         "Watchlist",
         "Simulated Trades",
@@ -62,18 +64,20 @@ def main():
     with tabs[0]:
         render_morning_brief()
     with tabs[1]:
-        render_stock_charts()
+        render_data_quality()
     with tabs[2]:
-        render_watchlist()
+        render_stock_charts()
     with tabs[3]:
-        render_trade_journal()
+        render_watchlist()
     with tabs[4]:
-        render_feedback_loop()
+        render_trade_journal()
     with tabs[5]:
-        render_agent_debate()
+        render_feedback_loop()
     with tabs[6]:
-        render_research_memory()
+        render_agent_debate()
     with tabs[7]:
+        render_research_memory()
+    with tabs[8]:
         render_settings()
 
 
@@ -111,6 +115,101 @@ def render_morning_brief():
         c5.metric("Watchlist", metrics.get("watchlist_setups", "n/a"))
 
     st.markdown(brief)
+
+
+def render_data_quality():
+    st.subheader("Data Quality")
+    st.caption("Checks whether the morning data packet is strong enough for simulated trade review.")
+
+    watchlist_size = max(1, len(load_watchlist_entries()))
+    controls = st.columns([1, 1, 3])
+    live_checks = controls[0].toggle("Live checks", value=True)
+    sample_size = controls[1].number_input(
+        "Sample",
+        min_value=1,
+        max_value=watchlist_size,
+        value=min(12, watchlist_size),
+        step=1,
+    )
+    if controls[2].button("Refresh Data Quality", type="primary"):
+        load_data_health.clear()
+
+    with st.spinner("Checking provider status and watchlist data coverage..."):
+        report = load_data_health(live_checks=live_checks, live_check_limit=int(sample_size))
+
+    gate = report["gate"]
+    coverage = report["coverage"]
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Score", f"{report['data_quality_score']}/100")
+    c2.metric("Gate", gate["status"])
+    c3.metric("Symbols", report["watchlist_count"])
+    c4.metric("Price OK", coverage["price_ok"])
+    c5.metric("Coverage", format_percent_display(coverage["checked_coverage_pct"]))
+
+    if gate["status"] in {"Pass", "Conditional"}:
+        st.success(gate["decision"])
+    elif gate["status"] == "Watch Only":
+        st.warning(gate["decision"])
+    else:
+        st.error(gate["decision"])
+
+    left, right = st.columns([1, 1])
+    with left:
+        st.markdown("#### Domain Scores")
+        domain_rows = []
+        for name, item in report["domain_scores"].items():
+            domain_rows.append({
+                "domain": name.replace("_", " ").title(),
+                "score": item["score"],
+                "max": item["max_score"],
+                "status": item["status"],
+                "detail": item["detail"],
+            })
+        st.dataframe(pd.DataFrame(domain_rows), hide_index=True, width="stretch")
+
+    with right:
+        st.markdown("#### Provider Status")
+        provider_rows = []
+        for provider in report["providers"]:
+            provider_rows.append({
+                "provider": provider["name"],
+                "status": provider["status"],
+                "configured": provider["configured"],
+                "key": provider["env_key"] or "built-in",
+                "domain": provider["domain"],
+            })
+        st.dataframe(pd.DataFrame(provider_rows), hide_index=True, width="stretch")
+
+    st.markdown("#### Live Price Sample")
+    checks = pd.DataFrame(report.get("live_price_checks", []))
+    if checks.empty:
+        st.info("Live price checks are disabled.")
+    else:
+        display_cols = [
+            column for column in [
+                "symbol",
+                "status",
+                "latest_date",
+                "calendar_age_days",
+                "latest_close",
+                "rows",
+                "message",
+            ]
+            if column in checks.columns
+        ]
+        st.dataframe(checks[display_cols], hide_index=True, width="stretch")
+
+    st.markdown("#### Blockers")
+    if report["blockers"]:
+        for blocker in report["blockers"]:
+            st.write(f"- {blocker}")
+    else:
+        st.success("No blockers detected.")
+
+    st.markdown("#### Recommended Next Fixes")
+    for item in report["recommendations"]:
+        st.write(f"- {item}")
 
 
 def render_watchlist():
@@ -617,6 +716,20 @@ def format_number(value):
         return f"{float(value):.2f}"
     except (TypeError, ValueError):
         return "0.00"
+
+
+def format_percent_display(value):
+    if value is None:
+        return "n/a"
+    return f"{value:.1f}%"
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def load_data_health(live_checks=True, live_check_limit=12):
+    return generate_data_health_report(
+        live_checks=live_checks,
+        live_check_limit=live_check_limit,
+    )
 
 
 def money(value):

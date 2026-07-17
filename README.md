@@ -33,10 +33,11 @@ The `dashboard start` command:
 
 1. Starts a local Streamlit dashboard at `http://localhost:8501`, or the port set in `DASHBOARD_PORT`.
 2. Shows the latest morning brief, watchlist categories, simulated trade journal, agent debate logs, and research memory.
-3. Stores simulated trade journal entries locally in `portfolio/trade_journal.csv`.
-4. Tracks planned/open/closed simulated trades, setup type, source, entry, stop, target, shares, planned risk, live price refresh, unrealized P&L, realized P&L, R-multiple, outcome, exit reason, and lessons learned.
-5. Keeps local trade notes out of Git.
-6. Does not place trades.
+3. Shows a Data Quality tab with provider status, data-quality score, live price sample coverage, blockers, and recommended provider fixes.
+4. Stores simulated trade journal entries locally in `portfolio/trade_journal.csv`.
+5. Tracks planned/open/closed simulated trades, setup type, source, entry, stop, target, shares, planned risk, live price refresh, unrealized P&L, realized P&L, R-multiple, outcome, exit reason, and lessons learned.
+6. Keeps local trade notes out of Git.
+7. Does not place trades.
 
 The `journal summary` command:
 
