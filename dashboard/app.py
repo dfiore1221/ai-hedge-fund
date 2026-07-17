@@ -1,4 +1,6 @@
 import json
+import hmac
+import os
 import re
 import sqlite3
 import subprocess
@@ -8,6 +10,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+from dotenv import load_dotenv
 
 from agents.feedback_loop import generate_feedback_report
 from data.trade_journal import (
@@ -20,12 +23,14 @@ from data.trade_journal import (
     save_trade_journal,
     summarize_trade_journal,
 )
+from security.checks import build_security_report, redact_text
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = PROJECT_ROOT / "memory" / "hedge_fund_memory.db"
 WATCHLIST_PATH = PROJECT_ROOT / "framework" / "watchlist.json"
 MORNING_BRIEF_PATH = PROJECT_ROOT / "reports" / "morning_brief" / "daily_morning_brief.md"
+ENV_PATH = PROJECT_ROOT / ".env"
 
 
 st.set_page_config(
@@ -36,8 +41,12 @@ st.set_page_config(
 
 
 def main():
+    load_dotenv(ENV_PATH)
     st.title("AI Hedge Fund Cockpit")
     st.caption("Watch-only research, simulated trades, agent debate, and memory.")
+
+    if not require_dashboard_auth():
+        return
 
     tabs = st.tabs([
         "Morning Brief",
@@ -85,7 +94,7 @@ def render_morning_brief():
             if result.returncode == 0:
                 st.success("Morning brief refreshed.")
                 st.rerun()
-            st.error(result.stderr or result.stdout or "Morning brief failed.")
+            st.error(redact_text(result.stderr or result.stdout or "Morning brief failed."))
 
     brief = read_text(MORNING_BRIEF_PATH)
     if not brief:
@@ -428,6 +437,43 @@ def render_settings():
     st.text_area("Automation log", read_text(automation_log)[-3000:], height=180)
     st.text_area("Launchd errors", read_text(err_log)[-3000:], height=140)
     st.text_area("Launchd output", read_text(out_log)[-3000:], height=100)
+
+    st.markdown("#### Security")
+    security_report = build_security_report()
+    st.write(f"Required checks passed: `{security_report['passed']}`")
+    st.write(f"Dashboard passcode: `{env_display('DASHBOARD_PASSCODE')}`")
+    st.write(f"Email allowlist: `{env_display('APPROVED_EMAIL_RECIPIENTS')}`")
+    if security_report["blockers"]:
+        st.error("Security blockers found. Run `python3 main.py security check` for details.")
+    elif security_report["warnings"]:
+        st.warning("Security warnings found. Run `python3 main.py security check` for details.")
+    else:
+        st.success("Security check is clean.")
+
+
+def require_dashboard_auth():
+    passcode = os.getenv("DASHBOARD_PASSCODE", "").strip()
+    if not passcode:
+        st.warning("Dashboard passcode is not set. Add DASHBOARD_PASSCODE to .env to lock this cockpit.")
+        return True
+
+    if st.session_state.get("dashboard_authenticated"):
+        return True
+
+    st.subheader("Dashboard Locked")
+    entered = st.text_input("Passcode", type="password")
+    if st.button("Unlock Dashboard"):
+        if hmac.compare_digest(entered, passcode):
+            st.session_state["dashboard_authenticated"] = True
+            st.rerun()
+        st.error("Incorrect passcode.")
+
+    return False
+
+
+def env_display(key):
+    value = os.getenv(key, "").strip()
+    return "set" if value else "missing"
 
 
 def read_text(path):

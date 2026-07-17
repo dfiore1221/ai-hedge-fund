@@ -205,6 +205,20 @@ def feedback(action):
     print(f"Saved feedback report to: {output_path}")
 
 
+def security(action):
+    if action.lower() != "check":
+        raise ValueError("Security command currently supports: check")
+
+    try:
+        from security.checks import build_security_report, format_security_report
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    print(format_security_report(build_security_report()))
+
+
 def macro(period):
     if period.lower() != "today":
         raise ValueError("Macro command currently supports: today")
@@ -397,6 +411,7 @@ def main():
         print("  python3 main.py portfolio MSFT")
         print("  python3 main.py journal summary")
         print("  python3 main.py feedback summary")
+        print("  python3 main.py security check")
         print("  python3 main.py options MSFT")
         print("  python3 main.py news MSFT")
         print("  python3 main.py backtest MSFT")
@@ -436,6 +451,8 @@ def main():
             journal(ticker)
         elif command == "feedback":
             feedback(ticker)
+        elif command == "security":
+            security(ticker)
         elif command == "options":
             options(ticker)
         elif command == "news":

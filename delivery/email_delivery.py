@@ -18,6 +18,7 @@ class EmailConfig:
     smtp_password: str
     email_from: str
     email_to: str
+    approved_recipients: list[str]
     use_tls: bool = True
 
 
@@ -39,19 +40,23 @@ def load_email_config():
             + ". Add these before sending the morning brief email."
         )
 
-    return EmailConfig(
+    config = EmailConfig(
         smtp_host=required["SMTP_HOST"],
         smtp_port=int(os.getenv("SMTP_PORT", "587")),
         smtp_username=required["SMTP_USERNAME"],
         smtp_password=required["SMTP_PASSWORD"],
         email_from=required["EMAIL_FROM"],
         email_to=required["MORNING_BRIEF_EMAIL_TO"],
+        approved_recipients=parse_csv(os.getenv("APPROVED_EMAIL_RECIPIENTS", "")),
         use_tls=os.getenv("SMTP_USE_TLS", "true").lower() != "false",
     )
+    validate_email_recipients(config)
+    return config
 
 
 def send_email(subject, body, attachment_path=None, config=None):
     config = config or load_email_config()
+    validate_email_recipients(config)
 
     message = EmailMessage()
     message["Subject"] = subject
@@ -80,3 +85,21 @@ def send_email(subject, body, attachment_path=None, config=None):
         "subject": subject,
         "attachment": str(attachment_path) if attachment_path else None,
     }
+
+
+def validate_email_recipients(config):
+    recipients = parse_csv(config.email_to)
+    approved = [item.lower() for item in config.approved_recipients]
+    if not approved:
+        return
+
+    unapproved = sorted(set(item.lower() for item in recipients) - set(approved))
+    if unapproved:
+        raise RuntimeError(
+            "Email recipient is not in APPROVED_EMAIL_RECIPIENTS: "
+            + ", ".join(unapproved)
+        )
+
+
+def parse_csv(value):
+    return [item.strip() for item in value.split(",") if item.strip()]

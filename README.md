@@ -14,6 +14,7 @@ python3 main.py earnings MSFT
 python3 main.py portfolio MSFT
 python3 main.py journal summary
 python3 main.py feedback summary
+python3 main.py security check
 python3 main.py technical MSFT
 python3 main.py options MSFT
 python3 main.py news MSFT
@@ -49,6 +50,13 @@ The `feedback summary` command:
 4. Scores linked agent calls against trade outcomes so Technical, Risk, CIO, Macro, Options, and Quant can be evaluated over time.
 5. Saves a local decision feedback report in `reports/feedback/`.
 
+The `security check` command:
+
+1. Confirms required environment settings are present without printing secret values.
+2. Checks that local-only files such as `.env`, memory DBs, reports, holdings, and the trade journal are ignored by Git.
+3. Warns if dashboard passcode protection or approved email recipient allowlisting is missing.
+4. Verifies morning brief email recipients against `APPROVED_EMAIL_RECIPIENTS` when configured.
+
 The `morning today` command:
 
 1. Runs one shared daily macro read.
@@ -78,7 +86,16 @@ SMTP_USERNAME=your_email@example.com
 SMTP_PASSWORD=your_email_app_password_here
 EMAIL_FROM=your_email@example.com
 MORNING_BRIEF_EMAIL_TO=your_email@example.com
+APPROVED_EMAIL_RECIPIENTS=your_email@example.com
 ```
+
+Optional dashboard protection:
+
+```bash
+DASHBOARD_PASSCODE=choose_a_local_dashboard_passcode
+```
+
+When `DASHBOARD_PASSCODE` is set, the Streamlit cockpit requires that passcode before showing the dashboard. If it is not set, the dashboard remains usable but `security check` will warn you.
 
 To schedule the email for 4:45 AM on macOS:
 
@@ -169,6 +186,7 @@ Create a local `.env` file:
 OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_MODEL=gpt-5
 SEC_USER_AGENT="AI Hedge Fund Research App your_email@example.com"
+DASHBOARD_PASSCODE=choose_a_local_dashboard_passcode
 ```
 
 Install dependencies:
