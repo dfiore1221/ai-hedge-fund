@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agents.cio import create_cio_summary
 from agents.market_intelligence import generate_daily_market_intelligence
+from data.data_quality import generate_data_health_report
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -61,6 +62,7 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
     entries = build_entries(symbols)
     symbols = [entry["symbol"] for entry in entries]
     metadata_by_symbol = {entry["symbol"]: entry for entry in entries}
+    data_health = generate_data_health_report(symbols=symbols, live_checks=False)
     macro_report = generate_daily_market_intelligence()
     summaries = []
 
@@ -111,6 +113,7 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
         "agent": "Morning Brief",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "mode": "watch_only",
+        "data_health": data_health,
         "macro": macro_report,
         "symbols_scanned": symbols,
         "top_n": max_ideas,
@@ -379,6 +382,8 @@ def format_morning_brief(report):
     assessment = report["macro"]["assessment"]
     summaries = report["committee_summaries"]
     top_n = report.get("top_n", DEFAULT_TOP_N)
+    data_health = report.get("data_health") or {}
+    data_gate = data_health.get("gate") or {}
 
     lines = [
         "# AI Hedge Fund Morning Brief",
@@ -395,6 +400,12 @@ def format_morning_brief(report):
         f"- Watchlist Setups: {count_decisions(summaries, 'WATCHLIST SETUP')}",
         f"- No-Trade / Avoid Today: {count_decisions(summaries, 'NO TRADE')}",
         f"- Needs Data: {count_decisions(summaries, 'NEEDS DATA')}",
+        "",
+        "## Data Quality Gate",
+        f"- Score: {data_health.get('data_quality_score', 'n/a')}/100",
+        f"- Status: {data_gate.get('status', 'n/a')}",
+        f"- Decision: {data_gate.get('decision', 'n/a')}",
+        "- Note: Full live provider checks are available with `python3 main.py data-health today`.",
         "",
         "## Approved Simulated Trades",
     ]

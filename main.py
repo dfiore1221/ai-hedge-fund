@@ -220,6 +220,20 @@ def security(action):
     print(format_security_report(build_security_report()))
 
 
+def data_health(period):
+    if period.lower() != "today":
+        raise ValueError("Data-health command currently supports: today")
+
+    try:
+        from data.data_quality import format_data_health_report, generate_data_health_report
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    print(format_data_health_report(generate_data_health_report()))
+
+
 def project(action):
     if action.lower() != "status":
         raise ValueError("Project command currently supports: status")
@@ -453,6 +467,7 @@ def main():
         print("  python3 main.py journal summary")
         print("  python3 main.py feedback summary")
         print("  python3 main.py security check")
+        print("  python3 main.py data-health today")
         print("  python3 main.py project status")
         print("  python3 main.py options MSFT")
         print("  python3 main.py news MSFT")
@@ -495,6 +510,8 @@ def main():
             feedback(ticker)
         elif command == "security":
             security(ticker)
+        elif command == "data-health":
+            data_health(ticker)
         elif command == "project":
             project(ticker)
         elif command == "options":

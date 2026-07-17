@@ -15,6 +15,7 @@ python3 main.py portfolio MSFT
 python3 main.py journal summary
 python3 main.py feedback summary
 python3 main.py security check
+python3 main.py data-health today
 python3 main.py project status
 python3 main.py technical MSFT
 python3 main.py options MSFT
@@ -57,6 +58,14 @@ The `security check` command:
 2. Checks that local-only files such as `.env`, memory DBs, reports, holdings, and the trade journal are ignored by Git.
 3. Warns if dashboard passcode protection or approved email recipient allowlisting is missing.
 4. Verifies morning brief email recipients against `APPROVED_EMAIL_RECIPIENTS` when configured.
+
+The `data-health today` command:
+
+1. Checks configured data providers without printing secret values.
+2. Runs a live sample of watchlist price-history checks through the current market-data path.
+3. Scores the morning data packet across price/bars, reference data, earnings/events, news/analyst, options, macro/event context, provider agreement checks, and critical errors.
+4. Produces a data-quality gate: Pass, Conditional, Watch Only, Needs Data, or Blocked.
+5. Explains whether caution is caused by weak setup quality or missing/stale/conflicting data.
 
 The `project status` command:
 
@@ -215,7 +224,10 @@ pip install -r requirements.txt
 
 ## Next Build Targets
 
+- Data-quality scoring, provider status checks, and source conflict detection
 - Daily market regime intelligence
 - Capital flow and sector rotation analysis
 - Watchlist and ticker comparison workflows
 - Portfolio and trade construction layers
+
+See `docs/data_quality_systems_research.md` for the current data-provider research and implementation roadmap.
