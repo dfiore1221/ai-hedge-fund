@@ -271,15 +271,18 @@ def format_market_intelligence_report(report):
     ])
 
     economic_calendar = report.get("economic_calendar") or {}
+    provider = economic_calendar.get("provider") or "Economic Calendar"
     if economic_calendar.get("status") == "not_configured":
-        lines.append("- Trading Economics: not configured. Add TRADING_ECONOMICS_API_KEY to .env to enable economic event risk.")
+        lines.append("- Economic calendar: not configured. Add FRED_API_KEY or TRADING_ECONOMICS_API_KEY to .env to enable event risk.")
     elif economic_calendar.get("error"):
-        lines.append(f"- Trading Economics: {economic_calendar['error']}")
+        lines.append(f"- {provider}: {economic_calendar['error']}")
     else:
         summary = economic_calendar.get("summary") or {}
-        lines.append(f"- Trading Economics status: {economic_calendar.get('status')}")
+        lines.append(f"- {provider} status: {economic_calendar.get('status')}")
         lines.append(f"- Window: {economic_calendar.get('start_date')} to {economic_calendar.get('end_date')}")
         lines.append(f"- Events: {summary.get('event_count', 0)} total; {summary.get('high_importance_count', 0)} high-importance.")
+        if economic_calendar.get("fallback_from"):
+            lines.append(f"- Fallback: using {provider} because {economic_calendar.get('fallback_from')} was unavailable.")
         next_event = summary.get("next_high_importance_event")
         lines.append(f"- Next High-Importance Event: {format_calendar_event(next_event)}")
         for event in (economic_calendar.get("high_importance_events") or [])[:8]:

@@ -10,54 +10,100 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = PROJECT_ROOT / ".env"
 TRADING_ECONOMICS_CALENDAR_URL = "https://api.tradingeconomics.com/calendar/country"
+FRED_RELEASE_DATES_URL = "https://api.stlouisfed.org/fred/releases/dates"
 DEFAULT_COUNTRIES = ["united states"]
 MARKET_MOVING_KEYWORDS = [
     "adp employment",
+    "beige book",
+    "capacity utilization",
     "cpi",
     "core cpi",
     "core pce",
     "crude oil inventories",
+    "durable goods",
+    "employment situation",
     "fed interest rate",
     "federal reserve",
     "fomc",
     "gdp",
+    "gross domestic product",
     "initial jobless claims",
+    "industrial production",
+    "inflation",
     "ism",
     "jobless claims",
+    "labor turnover",
+    "new residential construction",
     "non farm",
     "non-farm",
     "payroll",
+    "personal income",
+    "personal income and outlays",
     "pce",
     "pmi",
+    "ppi",
+    "producer price",
     "retail sales",
     "treasury auction",
+    "unemployment insurance",
     "unemployment rate",
+]
+FRED_EXCLUDED_RELEASE_KEYWORDS = [
+    "daily treasury",
+    "fomc press release",
+    "gdpnow",
+    "national accounts",
+    "state retail sales",
+    "state unemployment insurance",
+    "treasury inflation-indexed",
 ]
 
 
 def get_economic_calendar(days_ahead=7, days_back=0, countries=None):
     load_dotenv(ENV_PATH)
-    api_key = os.getenv("TRADING_ECONOMICS_API_KEY", "").strip()
+    trading_economics_key = os.getenv("TRADING_ECONOMICS_API_KEY", "").strip()
+    fred_api_key = os.getenv("FRED_API_KEY", "").strip()
     countries = countries or DEFAULT_COUNTRIES
-
-    if not api_key:
-        return build_calendar_response(
-            configured=False,
-            status="not_configured",
-            error="TRADING_ECONOMICS_API_KEY is not configured.",
-            events=[],
-            countries=countries,
-            start_date=(date.today() - timedelta(days=days_back)).isoformat(),
-            end_date=(date.today() + timedelta(days=days_ahead)).isoformat(),
-        )
-
     start_date = date.today() - timedelta(days=days_back)
     end_date = date.today() + timedelta(days=days_ahead)
 
+    if trading_economics_key:
+        trading_economics_response = get_trading_economics_calendar(
+            trading_economics_key,
+            countries,
+            start_date,
+            end_date,
+        )
+        if trading_economics_response.get("status") in {"ok", "partial"}:
+            return trading_economics_response
+        if fred_api_key:
+            fred_response = get_fred_release_calendar(fred_api_key, start_date, end_date)
+            fred_response["fallback_from"] = "Trading Economics"
+            fred_response["fallback_reason"] = trading_economics_response.get("error")
+            return fred_response
+        return trading_economics_response
+
+    if fred_api_key:
+        return get_fred_release_calendar(fred_api_key, start_date, end_date)
+
+    return build_calendar_response(
+        provider="Economic Calendar",
+        configured=False,
+        status="not_configured",
+        error="Neither TRADING_ECONOMICS_API_KEY nor FRED_API_KEY is configured.",
+        events=[],
+        countries=countries,
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+    )
+
+
+def get_trading_economics_calendar(api_key, countries, start_date, end_date):
     try:
         payload = fetch_calendar_events(api_key, countries, start_date, end_date)
     except Exception as exc:
         return build_calendar_response(
+            provider="Trading Economics",
             configured=True,
             status="error",
             error=f"Could not fetch Trading Economics calendar: {exc}",
@@ -69,6 +115,7 @@ def get_economic_calendar(days_ahead=7, days_back=0, countries=None):
 
     if not isinstance(payload, list):
         return build_calendar_response(
+            provider="Trading Economics",
             configured=True,
             status="error",
             error="Trading Economics calendar returned an unexpected payload.",
@@ -79,11 +126,12 @@ def get_economic_calendar(days_ahead=7, days_back=0, countries=None):
         )
 
     events = sorted(
-        [normalize_event(item) for item in payload],
+        [normalize_trading_economics_event(item) for item in payload],
         key=lambda item: item.get("datetime") or "",
     )
 
     return build_calendar_response(
+        provider="Trading Economics",
         configured=True,
         status="ok",
         error=None,
@@ -105,7 +153,67 @@ def fetch_calendar_events(api_key, countries, start_date, end_date):
     return response.json()
 
 
-def normalize_event(item):
+def get_fred_release_calendar(api_key, start_date, end_date):
+    try:
+        payload = fetch_fred_release_dates(api_key, start_date, end_date)
+    except Exception as exc:
+        return build_calendar_response(
+            provider="FRED Release Calendar",
+            configured=True,
+            status="error",
+            error=f"Could not fetch FRED release calendar: {exc}",
+            events=[],
+            countries=["united states"],
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+        )
+
+    release_dates = payload.get("release_dates", [])
+    if not isinstance(release_dates, list):
+        return build_calendar_response(
+            provider="FRED Release Calendar",
+            configured=True,
+            status="error",
+            error="FRED release calendar returned an unexpected payload.",
+            events=[],
+            countries=["united states"],
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+        )
+
+    events = sorted(
+        [normalize_fred_release_event(item) for item in release_dates],
+        key=lambda item: item.get("datetime") or "",
+    )
+
+    return build_calendar_response(
+        provider="FRED Release Calendar",
+        configured=True,
+        status="ok",
+        error=None,
+        events=events,
+        countries=["united states"],
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+    )
+
+
+def fetch_fred_release_dates(api_key, start_date, end_date):
+    params = {
+        "api_key": api_key,
+        "file_type": "json",
+        "realtime_start": start_date.isoformat(),
+        "realtime_end": end_date.isoformat(),
+        "sort_order": "asc",
+        "limit": 1000,
+        "include_release_dates_with_no_data": "true",
+    }
+    response = requests.get(FRED_RELEASE_DATES_URL, params=params, timeout=20)
+    response.raise_for_status()
+    return response.json()
+
+
+def normalize_trading_economics_event(item):
     importance = parse_int(item.get("Importance"))
     event_name = item.get("Event") or ""
     category = item.get("Category") or ""
@@ -133,7 +241,34 @@ def normalize_event(item):
     }
 
 
-def build_calendar_response(configured, status, error, events, countries, start_date, end_date):
+def normalize_fred_release_event(item):
+    release_name = item.get("release_name") or ""
+    event_name = release_name or f"FRED release {item.get('release_id')}"
+    event_is_high_importance = is_fred_market_moving_event(event_name)
+
+    return {
+        "calendar_id": item.get("release_id"),
+        "datetime": item.get("date"),
+        "date": item.get("date"),
+        "country": "United States",
+        "category": "economic_release",
+        "event": event_name,
+        "reference": None,
+        "source": "FRED",
+        "source_url": f"https://fred.stlouisfed.org/release?rid={item.get('release_id')}" if item.get("release_id") else None,
+        "actual": None,
+        "previous": None,
+        "forecast": None,
+        "te_forecast": None,
+        "importance": 3 if event_is_high_importance else 1,
+        "is_high_importance": event_is_high_importance,
+        "url": f"https://fred.stlouisfed.org/release?rid={item.get('release_id')}" if item.get("release_id") else None,
+        "last_update": item.get("release_last_updated"),
+        "ticker": None,
+    }
+
+
+def build_calendar_response(provider, configured, status, error, events, countries, start_date, end_date):
     high_importance_events = [item for item in events if item.get("is_high_importance")]
     future_high_importance_events = [
         item for item in high_importance_events
@@ -141,7 +276,7 @@ def build_calendar_response(configured, status, error, events, countries, start_
     ]
 
     return {
-        "provider": "Trading Economics",
+        "provider": provider,
         "configured": configured,
         "status": status,
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -174,6 +309,13 @@ def is_market_moving_event(event_name, category, importance):
         return True
 
     text = f"{event_name} {category}".lower()
+    return any(keyword in text for keyword in MARKET_MOVING_KEYWORDS)
+
+
+def is_fred_market_moving_event(event_name):
+    text = event_name.lower()
+    if any(keyword in text for keyword in FRED_EXCLUDED_RELEASE_KEYWORDS):
+        return False
     return any(keyword in text for keyword in MARKET_MOVING_KEYWORDS)
 
 

@@ -385,7 +385,7 @@ def build_event_context_detail(economic_calendar, event_provider_configured):
     if economic_calendar and economic_calendar.get("status") in {"ok", "partial"}:
         summary = economic_calendar.get("summary") or {}
         return (
-            "Trading Economics economic calendar available "
+            f"{economic_calendar.get('provider', 'Economic calendar')} available "
             f"({summary.get('event_count', 0)} events in window)."
         )
     if economic_calendar and economic_calendar.get("error"):
@@ -417,7 +417,10 @@ def build_macro_context_detail(fred_snapshot, economic_calendar, macro_provider_
         details.append(fred_snapshot["error"])
 
     if economic_calendar and economic_calendar.get("status") in {"ok", "partial"}:
-        details.append(f"Trading Economics event calendar available ({economic_calendar.get('status')}).")
+        details.append(
+            f"{economic_calendar.get('provider', 'Economic calendar')} available "
+            f"({economic_calendar.get('status')})."
+        )
     elif economic_calendar and economic_calendar.get("error") and economic_calendar.get("status") != "not_configured":
         details.append(economic_calendar["error"])
 
@@ -490,8 +493,10 @@ def build_recommendations(providers, domain_scores):
         recommendations.append("Add FRED next for official rates, inflation, credit, and macro time series.")
     if not {"Alpaca", "Polygon"} & configured_names:
         recommendations.append("Run an Alpaca vs Polygon bakeoff for primary market data.")
-    if "Trading Economics" not in configured_names:
-        recommendations.append("Add Trading Economics or equivalent for economic calendar/event risk.")
+    if domain_scores.get("earnings_events", {}).get("score", 0) < 10:
+        recommendations.append("Add or repair economic calendar/event risk coverage.")
+    elif "Trading Economics" not in configured_names:
+        recommendations.append("Trading Economics remains optional for premium forecasts, actuals, and global impact scoring.")
     if not {"Benzinga", "Finnhub"} & configured_names:
         recommendations.append("Add Benzinga or Finnhub for overnight news, earnings, and analyst actions.")
     if not {"Tradier", "ORATS"} & configured_names:
@@ -540,14 +545,15 @@ def format_data_health_report(report):
 
     lines.extend(["", "## Economic Calendar"])
     economic_calendar = report.get("economic_calendar") or {}
+    provider = economic_calendar.get("provider") or "Economic Calendar"
     if economic_calendar.get("status") == "not_configured":
-        lines.append("- Trading Economics: not configured.")
+        lines.append("- Economic calendar: not configured.")
     elif economic_calendar.get("error"):
-        lines.append(f"- Trading Economics: {economic_calendar['error']}")
+        lines.append(f"- {provider}: {economic_calendar['error']}")
     else:
         summary = economic_calendar.get("summary") or {}
         lines.extend([
-            f"- Trading Economics: {economic_calendar.get('status')}",
+            f"- {provider}: {economic_calendar.get('status')}",
             f"- Window: {economic_calendar.get('start_date')} to {economic_calendar.get('end_date')}",
             f"- Events: {summary.get('event_count', 0)}",
             f"- High-Importance Events: {summary.get('high_importance_count', 0)}",
