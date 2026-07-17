@@ -472,8 +472,8 @@ Do not buy a big institutional data stack yet. First, build the provider abstrac
 
 Practical next build:
 
-1. Implement the data health framework with current providers.
-2. Add FRED official macro series.
+1. Implement the data health framework with current providers. Status: implemented.
+2. Add FRED official macro series. Status: implemented; requires `FRED_API_KEY` in `.env` to activate live official macro data.
 3. Add provider placeholders and local cache.
 4. Add data-quality section to morning brief.
 5. Run one week of morning briefs and record which missing fields block decisions.

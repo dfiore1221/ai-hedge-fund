@@ -5,6 +5,8 @@ import io
 from datetime import date, datetime
 from pathlib import Path
 
+from data.fred_data import get_fred_macro_snapshot
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WATCHLIST_PATH = PROJECT_ROOT / "framework" / "watchlist.json"
@@ -98,13 +100,14 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
     watchlist_entries = load_watchlist_entries(symbols)
     symbols = [entry["symbol"] for entry in watchlist_entries]
     providers = build_provider_statuses()
+    fred_snapshot = get_fred_macro_snapshot()
     live_price_checks = []
 
     if live_checks:
         for symbol in symbols[:live_check_limit]:
             live_price_checks.append(check_price_history(symbol))
 
-    domain_scores = score_domains(providers, live_price_checks, live_checks)
+    domain_scores = score_domains(providers, live_price_checks, live_checks, fred_snapshot)
     quality_score = sum(item["score"] for item in domain_scores.values())
     gate = classify_gate(quality_score, domain_scores, live_price_checks, live_checks)
 
@@ -117,6 +120,7 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
         "symbols_checked": [item["symbol"] for item in live_price_checks],
         "live_price_checks": live_price_checks,
         "providers": providers,
+        "official_macro": fred_snapshot,
         "domain_scores": domain_scores,
         "data_quality_score": quality_score,
         "gate": gate,
@@ -223,7 +227,7 @@ def check_price_history(symbol):
     }
 
 
-def score_domains(providers, live_price_checks, live_checks):
+def score_domains(providers, live_price_checks, live_checks, fred_snapshot=None):
     provider_names = {provider["name"]: provider for provider in providers}
     configured_names = {
         provider["name"]
@@ -234,7 +238,8 @@ def score_domains(providers, live_price_checks, live_checks):
     news_provider_configured = bool({"Benzinga", "Finnhub"} & configured_names)
     event_provider_configured = bool({"Trading Economics", "Finnhub", "Benzinga"} & configured_names)
     options_provider_configured = bool({"Tradier", "ORATS", "Polygon", "Alpaca", "Databento"} & configured_names)
-    macro_provider_configured = bool({"FRED", "Trading Economics"} & configured_names)
+    fred_ok = bool(fred_snapshot and fred_snapshot.get("status") in {"ok", "partial"})
+    macro_provider_configured = fred_ok or bool({"Trading Economics"} & configured_names)
     sec_configured = provider_names["SEC EDGAR"]["configured"]
 
     if live_checks:
@@ -278,7 +283,7 @@ def score_domains(providers, live_price_checks, live_checks):
             "score": 10 if macro_provider_configured else 4,
             "max_score": 10,
             "status": "strong" if macro_provider_configured else "starter",
-            "detail": "Official macro/event provider configured." if macro_provider_configured else "Current macro layer uses market proxies; official macro APIs not configured.",
+            "detail": build_macro_context_detail(fred_snapshot, macro_provider_configured),
         },
         "provider_agreement_checks": {
             "score": 10 if market_provider_configured and live_checks else 4 if live_checks else 2,
@@ -319,6 +324,14 @@ def build_coverage(live_price_checks, watchlist_count, live_checks):
         "price_missing_or_error": missing_or_error,
         "checked_coverage_pct": round(100 * safe_ratio(ok, checked), 1) if checked else 0,
     }
+
+
+def build_macro_context_detail(fred_snapshot, macro_provider_configured):
+    if not fred_snapshot or fred_snapshot.get("status") == "not_configured":
+        return "Current macro layer uses market proxies; official macro APIs not configured."
+    if fred_snapshot.get("status") in {"ok", "partial"}:
+        return f"FRED official macro data available ({fred_snapshot.get('status')})."
+    return fred_snapshot.get("error") or "FRED official macro data could not be verified."
 
 
 def classify_gate(quality_score, domain_scores, live_price_checks, live_checks):

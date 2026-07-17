@@ -139,9 +139,10 @@ Logs are written to `reports/morning_brief/automation.log`, `launchd.out.log`, a
 The `macro today` command:
 
 1. Pulls major index, volatility, rate, dollar, commodity, and crypto proxies.
-2. Ranks sector ETFs versus SPY.
-3. Produces a macro score, market regime, confidence score, and sector rotation table.
-4. Saves the report in `reports/market_intelligence/`.
+2. Pulls official FRED macro series when `FRED_API_KEY` is configured.
+3. Ranks sector ETFs versus SPY.
+4. Produces a macro score, market regime, confidence score, official macro section, and sector rotation table.
+5. Saves the report in `reports/market_intelligence/`.
 
 The `technical` command:
 
@@ -232,3 +233,13 @@ pip install -r requirements.txt
 - Portfolio and trade construction layers
 
 See `docs/data_quality_systems_research.md` for the current data-provider research and implementation roadmap.
+
+## Data Upgrade To-Do List
+
+- [x] Add FRED official macro data integration. Requires `FRED_API_KEY` in `.env` to activate live official macro series.
+- [ ] Add economic calendar integration.
+- [ ] Add news / analyst feed.
+- [ ] Add better market data provider.
+- [ ] Add options data provider.
+- [ ] Add local data cache.
+- [ ] Add provider comparison checks.

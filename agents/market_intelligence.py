@@ -1,6 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
+from data.fred_data import get_fred_macro_snapshot
 from data.market_data import get_macro_market_snapshot, get_sector_rotation_snapshot
 
 
@@ -10,18 +11,20 @@ REPORTS_DIR = PROJECT_ROOT / "reports" / "market_intelligence"
 
 def generate_daily_market_intelligence():
     macro = get_macro_market_snapshot()
+    official_macro = get_fred_macro_snapshot()
     sector_rotation = get_sector_rotation_snapshot()
-    assessment = assess_market_regime(macro, sector_rotation)
+    assessment = assess_market_regime(macro, sector_rotation, official_macro)
 
     return {
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "macro": macro,
+        "official_macro": official_macro,
         "sector_rotation": sector_rotation,
         "assessment": assessment,
     }
 
 
-def assess_market_regime(macro, sector_rotation):
+def assess_market_regime(macro, sector_rotation, official_macro=None):
     signals = []
 
     sp500 = macro.get("sp500", {})
@@ -43,6 +46,7 @@ def assess_market_regime(macro, sector_rotation):
     add_signal(signals, "Gold 20-day trend", gold.get("twenty_day_change_pct"), positive_above=0, weight=0.5)
     add_signal(signals, "Oil 20-day trend", oil.get("twenty_day_change_pct"), positive_above=0, weight=0.5)
     add_signal(signals, "Bitcoin 20-day trend", bitcoin.get("twenty_day_change_pct"), positive_above=0, weight=0.5)
+    add_official_macro_signals(signals, official_macro)
 
     risk_on_sectors = {"Technology", "Consumer Discretionary", "Communication Services", "Industrials", "Financials"}
     defensive_sectors = {"Utilities", "Consumer Staples", "Healthcare"}
@@ -84,6 +88,37 @@ def assess_market_regime(macro, sector_rotation):
     }
 
 
+def add_official_macro_signals(signals, official_macro):
+    if not official_macro or official_macro.get("status") == "not_configured":
+        signals.append({
+            "name": "FRED official macro",
+            "value": "not configured",
+            "score": 0,
+            "weight": 0,
+        })
+        return
+
+    summary = official_macro.get("summary") or {}
+    yield_curve = extract_summary_value(summary, "yield_curve_10y_2y")
+    high_yield_spread = extract_summary_value(summary, "high_yield_spread")
+    cpi_yoy = extract_summary_value(summary, "cpi_yoy")
+    unemployment = extract_summary_value(summary, "unemployment_rate")
+    gdp_yoy = extract_summary_value(summary, "gdp_yoy")
+
+    add_signal(signals, "FRED 10Y-2Y yield curve", yield_curve, positive_above=0, weight=1.0)
+    add_inverse_signal(signals, "FRED high-yield spread", high_yield_spread, positive_below=4.0, weight=1.0)
+    add_inverse_signal(signals, "FRED CPI YoY", cpi_yoy, positive_below=3.0, weight=0.75)
+    add_inverse_signal(signals, "FRED unemployment rate", unemployment, positive_below=5.0, weight=0.75)
+    add_signal(signals, "FRED real GDP YoY", gdp_yoy, positive_above=1.5, weight=0.75)
+
+
+def extract_summary_value(summary, key):
+    item = summary.get(key)
+    if not item:
+        return None
+    return item.get("value")
+
+
 def add_signal(signals, name, value, positive_above=0, weight=1.0):
     if value is None:
         score = 0
@@ -121,7 +156,11 @@ def add_inverse_signal(signals, name, value, positive_below=0, weight=1.0):
 
 
 def count_available_signals(signals):
-    return sum(1 for signal in signals if signal.get("value") is not None)
+    return sum(
+        1
+        for signal in signals
+        if signal.get("value") is not None and signal.get("weight") != 0
+    )
 
 
 def format_market_intelligence_report(report):
@@ -158,6 +197,27 @@ def format_market_intelligence_report(report):
             f"1D {format_pct(data.get('one_day_change_pct'))}, "
             f"20D {format_pct(data.get('twenty_day_change_pct'))}"
         )
+
+    lines.extend([
+        "",
+        "## Official Macro Data",
+    ])
+
+    official_macro = report.get("official_macro") or {}
+    if official_macro.get("status") == "not_configured":
+        lines.append("- FRED: not configured. Add FRED_API_KEY to .env to enable official macro series.")
+    elif official_macro.get("error"):
+        lines.append(f"- FRED: {official_macro['error']}")
+    else:
+        lines.append(f"- FRED status: {official_macro.get('status')}")
+        for item in official_macro.get("series", []):
+            if item.get("error"):
+                lines.append(f"- {item['name']} ({item['id']}): {item['error']}")
+                continue
+            lines.append(
+                f"- {item['name']} ({item['id']}): "
+                f"{format_value(item.get('value'))} as of {item.get('date')}"
+            )
 
     lines.extend([
         "",
