@@ -29,6 +29,7 @@ def generate_conflict_memo(symbol, agent_outputs):
     macro = agent_outputs.get("macro", {})
     technical = agent_outputs.get("technical", {})
     risk = agent_outputs.get("risk", {})
+    news = agent_outputs.get("news", {})
     options = agent_outputs.get("options", {})
     backtest = agent_outputs.get("backtest", {})
     memory = agent_outputs.get("memory", {})
@@ -44,6 +45,12 @@ def generate_conflict_memo(symbol, agent_outputs):
 
     if options.get("stance") == "bullish_positioning" and technical.get("stance") in {"no_trade", "bearish"}:
         conflicts.append("Bullish options positioning conflicts with weak technical setup.")
+
+    if news.get("stance") == "negative_catalyst" and technical.get("stance") == "bullish":
+        conflicts.append("Bullish technical stance conflicts with negative overnight news catalyst.")
+
+    if news.get("stance") == "positive_catalyst" and risk.get("decision") == "veto":
+        conflicts.append("Positive news catalyst conflicts with Risk Manager veto.")
 
     if risk.get("decision") == "veto" and technical.get("stance") in {"bullish", "neutral"}:
         conflicts.append("Risk veto conflicts with non-negative technical stance.")

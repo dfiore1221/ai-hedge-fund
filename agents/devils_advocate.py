@@ -38,8 +38,13 @@ def write_countercase(symbol, agent_outputs, conflicts):
     if options.get("stance") and options.get("confidence", 0) < 0.5:
         counterpoints.append("Options flow is low-confidence and should not override technical or risk evidence.")
 
+    if news.get("stance") == "negative_catalyst":
+        counterpoints.append("News layer flags a negative catalyst; bullish technical signals need confirmation.")
+    elif news.get("stance") == "positive_catalyst" and technical.get("stance") in {"no_trade", "bearish"}:
+        counterpoints.append("Positive headline catalyst conflicts with weak price action.")
+
     if news.get("missing_information"):
-        counterpoints.append("News feed lacks premium analyst/action relevance scoring.")
+        counterpoints.append("News layer is still a starter feed and can miss premium analyst/action signals.")
 
     thesis = memory.get("current_thesis") or {}
     if thesis.get("open_questions"):
@@ -70,12 +75,15 @@ def identify_bias_flags(agent_outputs, conflicts):
     flags = []
     risk = agent_outputs.get("risk", {})
     options = agent_outputs.get("options", {})
+    news = agent_outputs.get("news", {})
     memory = agent_outputs.get("memory", {})
 
     if risk.get("decision") == "veto" and memory.get("current_thesis"):
         flags.append("Confirmation bias risk: constructive thesis may tempt override of risk veto.")
     if options.get("stance") == "bullish_positioning" and options.get("confidence", 0) < 0.5:
         flags.append("FOMO risk: bullish options clue is low confidence.")
+    if news.get("stance") == "positive_catalyst" and risk.get("decision") != "approved_for_paper_trade":
+        flags.append("Headline-chasing risk: positive news should not override entry quality or risk controls.")
     if conflicts:
         flags.append("Conflict risk: specialist agents disagree.")
 

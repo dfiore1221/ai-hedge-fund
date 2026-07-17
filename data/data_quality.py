@@ -103,6 +103,7 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
     providers = build_provider_statuses()
     fred_snapshot = get_fred_macro_snapshot()
     economic_calendar = get_economic_calendar()
+    news_check = check_yahoo_news(symbols[0]) if symbols else {"status": "skipped"}
     live_price_checks = []
 
     if live_checks:
@@ -115,6 +116,7 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
         live_checks,
         fred_snapshot,
         economic_calendar,
+        news_check,
     )
     quality_score = sum(item["score"] for item in domain_scores.values())
     gate = classify_gate(quality_score, domain_scores, live_price_checks, live_checks)
@@ -130,6 +132,7 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
         "providers": providers,
         "official_macro": fred_snapshot,
         "economic_calendar": economic_calendar,
+        "starter_news_check": news_check,
         "domain_scores": domain_scores,
         "data_quality_score": quality_score,
         "gate": gate,
@@ -236,12 +239,41 @@ def check_price_history(symbol):
     }
 
 
+def check_yahoo_news(symbol):
+    try:
+        import yfinance as yf
+    except ModuleNotFoundError:
+        return {
+            "symbol": symbol,
+            "status": "error",
+            "message": "yfinance is not installed in the active Python environment.",
+        }
+
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            news_items = yf.Ticker(symbol).news or []
+    except Exception as exc:
+        return {
+            "symbol": symbol,
+            "status": "error",
+            "message": str(exc),
+        }
+
+    return {
+        "symbol": symbol,
+        "status": "ok" if news_items else "missing",
+        "headline_count": len(news_items),
+        "message": "Starter Yahoo news feed returned headlines." if news_items else "No starter headlines returned.",
+    }
+
+
 def score_domains(
     providers,
     live_price_checks,
     live_checks,
     fred_snapshot=None,
     economic_calendar=None,
+    news_check=None,
 ):
     provider_names = {provider["name"]: provider for provider in providers}
     configured_names = {
@@ -250,7 +282,9 @@ def score_domains(
         if provider["configured"]
     }
     market_provider_configured = bool({"Alpaca", "Polygon", "Databento"} & configured_names)
-    news_provider_configured = bool({"Benzinga", "Finnhub"} & configured_names)
+    premium_news_provider_configured = bool({"Benzinga", "Finnhub"} & configured_names)
+    starter_news_available = bool(news_check and news_check.get("status") == "ok")
+    news_provider_configured = premium_news_provider_configured or starter_news_available
     economic_calendar_ok = bool(
         economic_calendar and economic_calendar.get("status") in {"ok", "partial"}
     )
@@ -289,10 +323,10 @@ def score_domains(
             "detail": build_event_context_detail(economic_calendar, event_provider_configured),
         },
         "news_analyst": {
-            "score": 15 if news_provider_configured else 5,
+            "score": 15 if premium_news_provider_configured else 8 if starter_news_available else 5,
             "max_score": 15,
-            "status": "strong" if news_provider_configured else "starter",
-            "detail": "News/analyst provider configured." if news_provider_configured else "Only starter Yahoo headlines are available.",
+            "status": "strong" if premium_news_provider_configured else "starter_live" if starter_news_available else "starter",
+            "detail": build_news_context_detail(news_check, premium_news_provider_configured),
         },
         "options": {
             "score": 10 if options_provider_configured else 4,
@@ -359,6 +393,19 @@ def build_event_context_detail(economic_calendar, event_provider_configured):
     if event_provider_configured:
         return "Event provider configured."
     return "Only starter Yahoo earnings checks are available."
+
+
+def build_news_context_detail(news_check, premium_news_provider_configured):
+    if premium_news_provider_configured:
+        return "Premium news/analyst provider configured."
+    if news_check and news_check.get("status") == "ok":
+        return (
+            "Starter Yahoo headline feed available "
+            f"({news_check.get('headline_count', 0)} sample headlines)."
+        )
+    if news_check and news_check.get("message"):
+        return news_check["message"]
+    return "Only starter Yahoo headlines are available."
 
 
 def build_macro_context_detail(fred_snapshot, economic_calendar, macro_provider_configured):
@@ -505,6 +552,19 @@ def format_data_health_report(report):
             f"- Events: {summary.get('event_count', 0)}",
             f"- High-Importance Events: {summary.get('high_importance_count', 0)}",
         ])
+
+    lines.extend(["", "## Starter News Check"])
+    news_check = report.get("starter_news_check") or {}
+    if news_check.get("status") == "ok":
+        lines.append(
+            f"- {news_check.get('symbol')}: ok, {news_check.get('headline_count', 0)} starter headlines returned."
+        )
+    elif news_check.get("status"):
+        lines.append(
+            f"- {news_check.get('symbol', 'n/a')}: {news_check.get('status')} - {news_check.get('message', 'n/a')}"
+        )
+    else:
+        lines.append("- Not checked.")
 
     if report["live_checks_enabled"]:
         lines.extend(["", "## Live Price Checks"])

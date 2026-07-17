@@ -171,6 +171,8 @@ def score_candidate(summary):
     technical_stance = summary.get("technical_stance")
     risk_decision = summary.get("risk_decision")
     options_stance = summary.get("options_stance")
+    news_stance = summary.get("news_stance")
+    news_score = summary.get("news_catalyst_score")
     thesis = summary.get("current_thesis") or {}
     plan = summary.get("trade_plan") or {}
     source_reports = summary.get("source_reports") or {}
@@ -223,6 +225,16 @@ def score_candidate(summary):
         score += 5
     elif options_stance == "bearish_positioning":
         score -= 5
+
+    if news_stance == "positive_catalyst":
+        score += 8
+    elif news_stance == "negative_catalyst":
+        score -= 12
+    elif news_stance == "mixed_or_monitor":
+        score += 2
+
+    if news_score is not None:
+        score += min(8, max(-8, news_score))
 
     if thesis.get("rating") == "Watchlist":
         score += 12
@@ -283,6 +295,9 @@ def summarize_idea(summary):
         "target_3": risk.get("target_3") or (technical.get("setup") or {}).get("target_3"),
         "backtest_expectancy": backtest.get("expectancy_pct"),
         "backtest_sample_size": backtest.get("sample_size"),
+        "news_stance": summary.get("news_stance"),
+        "news_catalyst_score": summary.get("news_catalyst_score"),
+        "news_top_headline": summary.get("news_top_headline"),
         "thesis_rating": thesis.get("rating"),
         "conflict_count": (summary.get("conflict_memo") or {}).get("conflict_count", 0),
     }
@@ -295,6 +310,8 @@ def build_idea_reason(summary):
     risk = source_reports.get("risk") or {}
     backtest = source_reports.get("backtest") or {}
     thesis = summary.get("current_thesis") or {}
+    news = source_reports.get("news") or {}
+    news_summary = news.get("summary") or {}
 
     if summary.get("risk_decision") == "approved_for_paper_trade":
         reasons.append("risk checks passed")
@@ -320,6 +337,11 @@ def build_idea_reason(summary):
 
     if thesis.get("rating"):
         reasons.append(f"thesis rating {thesis['rating']}")
+
+    if news.get("stance") and news.get("stance") != "no_clear_catalyst":
+        reasons.append(
+            f"news {news['stance']} score {format_number(news_summary.get('total_score'))}"
+        )
 
     evidence = technical.get("key_evidence") or []
     if evidence:
@@ -511,6 +533,13 @@ def append_idea_section(lines, ideas, empty_text, show_guardrail=False):
             f"   - Backtest: expectancy {format_number(idea['backtest_expectancy'])}%, "
             f"sample {idea['backtest_sample_size'] if idea['backtest_sample_size'] is not None else 'n/a'}"
         )
+        if idea.get("news_stance"):
+            lines.append(
+                f"   - News: {idea['news_stance']} "
+                f"(score {format_number(idea.get('news_catalyst_score'))})"
+            )
+        if idea.get("news_top_headline"):
+            lines.append(f"   - Top headline: {idea['news_top_headline']}")
         if show_guardrail and idea["decision"] != "PAPER TRADE ONLY":
             lines.append("   - Guardrail: review only; not approved as a simulated trade.")
 

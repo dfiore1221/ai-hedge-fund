@@ -64,7 +64,7 @@ The `data-health today` command:
 
 1. Checks configured data providers without printing secret values.
 2. Runs a live sample of watchlist price-history checks through the current market-data path.
-3. Verifies FRED and Trading Economics when their keys are configured.
+3. Verifies FRED, Trading Economics, and starter news availability when configured or available.
 4. Scores the morning data packet across price/bars, reference data, earnings/events, news/analyst, options, macro/event context, provider agreement checks, and critical errors.
 5. Produces a data-quality gate: Pass, Conditional, Watch Only, Needs Data, or Blocked.
 6. Explains whether caution is caused by weak setup quality or missing/stale/conflicting data.
@@ -169,8 +169,9 @@ The `cio` command:
 3. Generates a conflict memo when agents disagree.
 4. Runs a Devil's Advocate countercase to challenge the setup.
 5. Respects Risk Manager vetoes.
-6. Produces one pre-market decision: paper trade, watch only, or no trade.
-7. Saves the report in `reports/cio/`.
+6. Uses overnight news stance, catalyst scoring, and analyst-action clues without letting headlines override risk controls.
+7. Produces one pre-market decision: paper trade, watch only, or no trade.
+8. Saves the report in `reports/cio/`.
 
 Company research reads the latest market-intelligence report when available, so the preferred workflow is:
 
@@ -240,7 +241,7 @@ See `docs/data_quality_systems_research.md` for the current data-provider resear
 
 - [x] Add FRED official macro data integration. Requires `FRED_API_KEY` in `.env` to activate live official macro series.
 - [x] Add economic calendar integration. Requires `TRADING_ECONOMICS_API_KEY` in `.env` to activate live event-risk checks.
-- [ ] Add news / analyst feed.
+- [x] Add starter news / analyst feed. Uses Yahoo starter headlines and analyst actions; premium Benzinga/Finnhub remains a future upgrade.
 - [ ] Add better market data provider.
 - [ ] Add options data provider.
 - [ ] Add local data cache.

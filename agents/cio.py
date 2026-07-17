@@ -49,7 +49,13 @@ def create_cio_summary(ticker, macro_report=None):
     save_conflict_memo(conflict_memo)
     save_devils_advocate_report(devils_advocate)
 
-    decision = determine_final_decision(macro_report, technical_report, risk_report, memory_context)
+    decision = determine_final_decision(
+        macro_report,
+        technical_report,
+        risk_report,
+        memory_context,
+        news_report,
+    )
     disagreements = identify_disagreements(
         macro_report,
         technical_report,
@@ -79,6 +85,9 @@ def create_cio_summary(ticker, macro_report=None):
         "technical_confidence": technical_report.get("confidence"),
         "risk_decision": risk_report["decision"],
         "risk_vetoes": risk_report["vetoes"],
+        "news_stance": news_report.get("stance"),
+        "news_catalyst_score": (news_report.get("summary") or {}).get("total_score"),
+        "news_top_headline": (news_report.get("summary") or {}).get("top_headline"),
         "options_stance": options_report.get("stance"),
         "backtest_expectancy": backtest_report.get("expectancy_pct"),
         "backtest_sample_size": backtest_report.get("sample_size"),
@@ -103,7 +112,7 @@ def create_cio_summary(ticker, macro_report=None):
     return result
 
 
-def determine_final_decision(macro_report, technical_report, risk_report, memory_context):
+def determine_final_decision(macro_report, technical_report, risk_report, memory_context, news_report=None):
     if risk_report["decision"] == "veto":
         if has_data_veto(risk_report):
             return {
@@ -136,12 +145,20 @@ def determine_final_decision(macro_report, technical_report, risk_report, memory
     technical_stance = technical_report.get("stance")
     thesis = memory_context.get("current_thesis") or {}
     rating = thesis.get("rating")
+    news_report = news_report or {}
 
     if regime == "Risk-Off" and technical_stance != "bullish":
         return {
             "status": "WATCHLIST SETUP",
             "confidence": 0.7,
             "reason": "Macro backdrop is risk-off and technical stance is not bullish.",
+        }
+
+    if news_report.get("stance") == "negative_catalyst":
+        return {
+            "status": "WATCHLIST SETUP",
+            "confidence": 0.6,
+            "reason": "News layer detected a negative catalyst, so setup needs more confirmation.",
         }
 
     if technical_stance == "bullish" and rating in {"Watchlist", "Deep Research Candidate"}:
@@ -267,6 +284,9 @@ def format_cio_report(report):
         f"- Market Regime: {report['market_regime']} ({report['macro_score']}/100, confidence {report['macro_confidence']}/100)",
         f"- Technical Stance: {report['technical_stance']} (confidence {report['technical_confidence']})",
         f"- Risk Decision: {report['risk_decision']}",
+        f"- News Stance: {report.get('news_stance') or 'n/a'}",
+        f"- News Catalyst Score: {format_number(report.get('news_catalyst_score'))}",
+        f"- Top Headline: {report.get('news_top_headline') or 'n/a'}",
         f"- Options Stance: {report.get('options_stance') or 'n/a'}",
         f"- Backtest Expectancy: {format_number(report.get('backtest_expectancy'))}%",
         f"- Backtest Sample Size: {report.get('backtest_sample_size') if report.get('backtest_sample_size') is not None else 'n/a'}",
