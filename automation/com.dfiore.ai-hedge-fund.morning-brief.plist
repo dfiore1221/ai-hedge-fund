@@ -9,11 +9,11 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string>
-    <string>/Users/davidfiore/Desktop/ai-hedge-fund/scripts/run_morning_email.sh</string>
+    <string>/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund/scripts/run_morning_email.sh</string>
   </array>
 
   <key>WorkingDirectory</key>
-  <string>/Users/davidfiore/Desktop/ai-hedge-fund</string>
+  <string>/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund</string>
 
   <key>StartCalendarInterval</key>
   <dict>
@@ -24,10 +24,10 @@
   </dict>
 
   <key>StandardOutPath</key>
-  <string>/Users/davidfiore/Desktop/ai-hedge-fund/reports/morning_brief/launchd.out.log</string>
+  <string>/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund/reports/morning_brief/launchd.out.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/Users/davidfiore/Desktop/ai-hedge-fund/reports/morning_brief/launchd.err.log</string>
+  <string>/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund/reports/morning_brief/launchd.err.log</string>
 
   <key>RunAtLoad</key>
   <false/>

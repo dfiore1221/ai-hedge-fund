@@ -15,6 +15,7 @@ python3 main.py portfolio MSFT
 python3 main.py journal summary
 python3 main.py feedback summary
 python3 main.py security check
+python3 main.py project status
 python3 main.py technical MSFT
 python3 main.py options MSFT
 python3 main.py news MSFT
@@ -29,7 +30,7 @@ python3 main.py facts MSFT
 
 The `dashboard start` command:
 
-1. Starts a local Streamlit dashboard at `http://localhost:8501`.
+1. Starts a local Streamlit dashboard at `http://localhost:8501`, or the port set in `DASHBOARD_PORT`.
 2. Shows the latest morning brief, watchlist categories, simulated trade journal, agent debate logs, and research memory.
 3. Stores simulated trade journal entries locally in `portfolio/trade_journal.csv`.
 4. Tracks planned/open/closed simulated trades, setup type, source, entry, stop, target, shares, planned risk, live price refresh, unrealized P&L, realized P&L, R-multiple, outcome, exit reason, and lessons learned.
@@ -56,6 +57,21 @@ The `security check` command:
 2. Checks that local-only files such as `.env`, memory DBs, reports, holdings, and the trade journal are ignored by Git.
 3. Warns if dashboard passcode protection or approved email recipient allowlisting is missing.
 4. Verifies morning brief email recipients against `APPROVED_EMAIL_RECIPIENTS` when configured.
+
+The `project status` command:
+
+1. Prints the active project root, Git branch, latest commit, remote, working-tree cleanliness, `.env` presence, dashboard port, and automation paths.
+2. Use this first when you are unsure which local copy is active.
+
+## Source of Truth
+
+The active working copy is:
+
+```bash
+/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund
+```
+
+Use this folder for dashboard runs, morning brief automation, commits, and future development. Older copies may exist, but this folder is the current GitHub-backed source of truth.
 
 The `morning today` command:
 
@@ -100,6 +116,7 @@ When `DASHBOARD_PASSCODE` is set, the Streamlit cockpit requires that passcode b
 To schedule the email for 4:45 AM on macOS:
 
 ```bash
+cd "/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund"
 chmod +x scripts/run_morning_email.sh
 mkdir -p ~/Library/LaunchAgents
 cp automation/com.dfiore.ai-hedge-fund.morning-brief.plist ~/Library/LaunchAgents/
@@ -187,6 +204,7 @@ OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_MODEL=gpt-5
 SEC_USER_AGENT="AI Hedge Fund Research App your_email@example.com"
 DASHBOARD_PASSCODE=choose_a_local_dashboard_passcode
+DASHBOARD_PORT=8501
 ```
 
 Install dependencies:

@@ -1,3 +1,4 @@
+import os
 import sys
 import re
 import subprocess
@@ -219,6 +220,45 @@ def security(action):
     print(format_security_report(build_security_report()))
 
 
+def project(action):
+    if action.lower() != "status":
+        raise ValueError("Project command currently supports: status")
+
+    print("# Project Status")
+    print("")
+    print(f"Project root: {PROJECT_ROOT}")
+    print(f"Branch: {git_value(['branch', '--show-current'])}")
+    print(f"Latest commit: {git_value(['log', '-1', '--oneline'])}")
+    print(f"Remote: {git_value(['remote', 'get-url', 'origin'])}")
+    print(f"Working tree: {'clean' if git_clean() else 'has local changes'}")
+    print(f".env present: {(PROJECT_ROOT / '.env').exists()}")
+    print(f"Dashboard port: {os.getenv('DASHBOARD_PORT', '8501')}")
+    print(f"Morning email script: {PROJECT_ROOT / 'scripts' / 'run_morning_email.sh'}")
+    print(f"LaunchAgent plist: {PROJECT_ROOT / 'automation' / 'com.dfiore.ai-hedge-fund.morning-brief.plist'}")
+
+
+def git_value(args):
+    result = subprocess.run(
+        ["git", *args],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return (result.stdout or result.stderr).strip() or "n/a"
+
+
+def git_clean():
+    result = subprocess.run(
+        ["git", "status", "--short"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0 and not result.stdout.strip()
+
+
 def macro(period):
     if period.lower() != "today":
         raise ValueError("Macro command currently supports: today")
@@ -283,6 +323,7 @@ def morning_email(period, dry_run=False):
 
 def dashboard(_arg=None):
     dashboard_path = PROJECT_ROOT / "dashboard" / "app.py"
+    port = os.getenv("DASHBOARD_PORT", "8501")
     subprocess.run([
         sys.executable,
         "-m",
@@ -290,7 +331,7 @@ def dashboard(_arg=None):
         "run",
         str(dashboard_path),
         "--server.port",
-        "8501",
+        port,
     ], cwd=PROJECT_ROOT, check=False)
 
 
@@ -412,6 +453,7 @@ def main():
         print("  python3 main.py journal summary")
         print("  python3 main.py feedback summary")
         print("  python3 main.py security check")
+        print("  python3 main.py project status")
         print("  python3 main.py options MSFT")
         print("  python3 main.py news MSFT")
         print("  python3 main.py backtest MSFT")
@@ -453,6 +495,8 @@ def main():
             feedback(ticker)
         elif command == "security":
             security(ticker)
+        elif command == "project":
+            project(ticker)
         elif command == "options":
             options(ticker)
         elif command == "news":
