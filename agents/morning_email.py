@@ -12,6 +12,7 @@ LOG_DIR = PROJECT_ROOT / "reports" / "morning_brief"
 def create_email_body(report):
     assessment = report["macro"]["assessment"]
     approved = report["approved_simulated_trades"]
+    conditional = report["conditional_setups"]
     watch = report["worth_watching"]
     rejected = report["rejected_or_avoid"]
 
@@ -23,13 +24,16 @@ def create_email_body(report):
         f"Market Regime: {assessment['market_regime']} ({assessment['macro_score']}/100)",
         f"Symbols Scanned: {len(report['symbols_scanned'])}",
         f"Approved Simulated Trades: {len(approved)}",
-        f"Worth Watching: {len(watch)}",
+        f"Conditional Setups: {len(conditional)}",
+        f"Watchlist Setups: {len(watch)}",
         "",
         "Approved Simulated Trades",
     ]
 
     lines.extend(format_email_ideas(approved, empty_text="None today."))
-    lines.extend(["", "Worth Watching"])
+    lines.extend(["", "Conditional Setups"])
+    lines.extend(format_email_ideas(conditional, empty_text="None today."))
+    lines.extend(["", "Watchlist Setups"])
     lines.extend(format_email_ideas(watch, empty_text="None today."))
     lines.extend(["", "Top Rejected / Avoid Today"])
     lines.extend(format_email_ideas(rejected[:5], empty_text="None surfaced."))
@@ -94,9 +98,10 @@ def build_subject(report):
     assessment = report["macro"]["assessment"]
     date = datetime.now().strftime("%Y-%m-%d")
     approved_count = len(report["approved_simulated_trades"])
+    conditional_count = len(report["conditional_setups"])
     return (
         f"AI Hedge Fund Morning Brief - {date} - "
-        f"{assessment['market_regime']} - {approved_count} simulated candidates"
+        f"{assessment['market_regime']} - {approved_count} simulated / {conditional_count} conditional"
     )
 
 

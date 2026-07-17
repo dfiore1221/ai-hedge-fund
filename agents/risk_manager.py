@@ -36,11 +36,18 @@ def evaluate_trade_risk(ticker, technical_report=None, policy=None):
 
     setup = technical_report["setup"]
     entry = setup.get("entry_trigger")
+    alternative_entry = setup.get("alternative_entry")
     stop = setup.get("stop")
     target = setup.get("target_1")
+    target_2 = setup.get("target_2")
+    target_3 = setup.get("target_3")
     reward_to_risk_value = setup.get("reward_to_risk")
+    reward_to_risk_to_target_2 = setup.get("reward_to_risk_to_target_2")
+    reward_to_risk_to_target_3 = setup.get("reward_to_risk_to_target_3")
+    pullback_reward_to_risk = setup.get("pullback_reward_to_risk")
 
     vetoes = []
+    conditional_issues = []
     warnings = []
 
     if entry is None or stop is None or target is None:
@@ -49,15 +56,15 @@ def evaluate_trade_risk(ticker, technical_report=None, policy=None):
         vetoes.append("Invalid stop relative to entry.")
 
     if reward_to_risk_value is None:
-        vetoes.append("Reward-to-risk unavailable.")
+        conditional_issues.append("Reward-to-risk unavailable.")
     elif reward_to_risk_value < policy["minimum_reward_to_risk"]:
-        vetoes.append(
+        conditional_issues.append(
             f"Reward-to-risk {reward_to_risk_value:.2f} is below minimum "
             f"{policy['minimum_reward_to_risk']:.2f}."
         )
 
     if technical_report["stance"] == "no_trade":
-        vetoes.append("Technical Analyst stance is no_trade.")
+        conditional_issues.append("Technical Analyst stance is no_trade.")
     elif technical_report["stance"] == "bearish":
         vetoes.append("Technical Analyst stance is bearish; long simulated trade is blocked.")
 
@@ -65,10 +72,9 @@ def evaluate_trade_risk(ticker, technical_report=None, policy=None):
 
     if position.get("error"):
         vetoes.append(position["error"])
-    elif position["position_value"] > position["max_position_value"]:
-        vetoes.append(
-            "Position value exceeds max single-position exposure: "
-            f"{position['position_value']:.2f} > {position['max_position_value']:.2f}."
+    elif position.get("size_limited_by_exposure"):
+        warnings.append(
+            "Position size was capped by max single-position exposure."
         )
 
     if ticker in policy["ai_semi_correlated_symbols"]:
@@ -93,8 +99,29 @@ def evaluate_trade_risk(ticker, technical_report=None, policy=None):
             f"Correlated AI/semi exposure is {portfolio_exposure['correlated_exposure_pct']:.2f}%; watch concentration."
         )
 
-    decision = "veto" if vetoes else "approved_for_paper_trade"
-    confidence = 0.25 if vetoes else 0.65
+    conditional_plan = build_conditional_plan(
+        entry=entry,
+        alternative_entry=alternative_entry,
+        stop=stop,
+        target=target,
+        target_2=target_2,
+        target_3=target_3,
+        minimum_reward_to_risk=policy["minimum_reward_to_risk"],
+        reward_to_risk=reward_to_risk_value,
+        reward_to_risk_to_target_2=reward_to_risk_to_target_2,
+        reward_to_risk_to_target_3=reward_to_risk_to_target_3,
+        pullback_reward_to_risk=pullback_reward_to_risk,
+    )
+
+    if vetoes:
+        decision = "veto"
+        confidence = 0.35
+    elif conditional_issues:
+        decision = "conditional_setup" if technical_report["stance"] in {"bullish", "neutral"} else "watchlist_setup"
+        confidence = 0.5 if decision == "conditional_setup" else 0.4
+    else:
+        decision = "approved_for_paper_trade"
+        confidence = 0.65
 
     return {
         "agent": "Risk Manager",
@@ -105,13 +132,21 @@ def evaluate_trade_risk(ticker, technical_report=None, policy=None):
         "policy_version": policy["version"],
         "technical_stance": technical_report["stance"],
         "entry": entry,
+        "alternative_entry": alternative_entry,
         "stop": stop,
         "target_1": target,
+        "target_2": target_2,
+        "target_3": target_3,
         "reward_to_risk": reward_to_risk_value,
+        "reward_to_risk_to_target_2": reward_to_risk_to_target_2,
+        "reward_to_risk_to_target_3": reward_to_risk_to_target_3,
+        "pullback_reward_to_risk": pullback_reward_to_risk,
         "position": position,
         "earnings": earnings,
         "portfolio_exposure": portfolio_exposure,
         "vetoes": vetoes,
+        "conditional_issues": conditional_issues,
+        "conditional_plan": conditional_plan,
         "warnings": warnings,
         "missing_information": [
             "Daily and weekly realized P&L limits are not connected yet.",
@@ -131,18 +166,90 @@ def calculate_position_size(entry, stop, policy):
 
     account_size = policy["paper_account_size"]
     max_dollar_risk = account_size * policy["max_risk_per_trade_pct"]
-    shares = int(max_dollar_risk // risk_per_share)
-    position_value = shares * entry
     max_position_value = account_size * policy["max_single_position_pct"]
+    shares_by_risk = int(max_dollar_risk // risk_per_share)
+    shares_by_exposure = int(max_position_value // entry)
+    shares = min(shares_by_risk, shares_by_exposure)
+
+    if shares <= 0:
+        return {"error": "Position size rounds to zero under current risk limits."}
+
+    position_value = shares * entry
 
     return {
         "paper_account_size": account_size,
         "max_dollar_risk": max_dollar_risk,
         "risk_per_share": risk_per_share,
         "shares": shares,
+        "shares_by_risk": shares_by_risk,
+        "shares_by_exposure": shares_by_exposure,
+        "size_limited_by_exposure": shares < shares_by_risk,
         "position_value": position_value,
         "max_position_value": max_position_value,
     }
+
+
+def build_conditional_plan(
+    entry,
+    alternative_entry,
+    stop,
+    target,
+    target_2,
+    target_3,
+    minimum_reward_to_risk,
+    reward_to_risk,
+    reward_to_risk_to_target_2,
+    reward_to_risk_to_target_3,
+    pullback_reward_to_risk,
+):
+    if entry is None or stop is None or target is None:
+        return {}
+
+    max_entry = max_entry_for_reward_to_risk(stop, target, minimum_reward_to_risk)
+    plan = {
+        "minimum_reward_to_risk": minimum_reward_to_risk,
+        "current_entry": entry,
+        "max_entry_for_target_1": max_entry,
+        "better_entry_required": max_entry is not None and entry > max_entry,
+        "suggested_entry": max_entry if max_entry is not None and entry > max_entry else entry,
+        "use_second_target": (
+            reward_to_risk_to_target_2 is not None
+            and reward_to_risk_to_target_2 >= minimum_reward_to_risk
+            and (reward_to_risk is None or reward_to_risk < minimum_reward_to_risk)
+        ),
+        "use_third_target": (
+            reward_to_risk_to_target_3 is not None
+            and reward_to_risk_to_target_3 >= minimum_reward_to_risk
+            and (reward_to_risk_to_target_2 is None or reward_to_risk_to_target_2 < minimum_reward_to_risk)
+        ),
+        "pullback_entry_viable": (
+            pullback_reward_to_risk is not None
+            and pullback_reward_to_risk >= minimum_reward_to_risk
+        ),
+        "alternative_entry": alternative_entry,
+        "target_1": target,
+        "target_2": target_2,
+        "target_3": target_3,
+    }
+
+    if plan["pullback_entry_viable"]:
+        plan["condition"] = "Wait for pullback entry; do not chase breakout."
+    elif plan["better_entry_required"]:
+        plan["condition"] = "Only consider if price is at or below suggested entry."
+    elif plan["use_second_target"]:
+        plan["condition"] = "Only consider if target 2 is the intended profit objective."
+    elif plan["use_third_target"]:
+        plan["condition"] = "Only consider if target 3 is realistic and aligned with market regime."
+    else:
+        plan["condition"] = "Monitor only; current setup does not meet risk structure."
+
+    return plan
+
+
+def max_entry_for_reward_to_risk(stop, target, minimum_reward_to_risk):
+    if stop is None or target is None:
+        return None
+    return (target + (minimum_reward_to_risk * stop)) / (1 + minimum_reward_to_risk)
 
 
 def build_veto_report(ticker, policy, technical_report, reasons):
@@ -155,13 +262,21 @@ def build_veto_report(ticker, policy, technical_report, reasons):
         "policy_version": policy["version"],
         "technical_stance": technical_report.get("stance"),
         "entry": None,
+        "alternative_entry": None,
         "stop": None,
         "target_1": None,
+        "target_2": None,
+        "target_3": None,
         "reward_to_risk": None,
+        "reward_to_risk_to_target_2": None,
+        "reward_to_risk_to_target_3": None,
+        "pullback_reward_to_risk": None,
         "position": {},
         "earnings": {},
         "portfolio_exposure": {},
         "vetoes": reasons,
+        "conditional_issues": [],
+        "conditional_plan": {},
         "warnings": [],
         "missing_information": [],
         "citations": technical_report.get("citations", []),
@@ -181,9 +296,14 @@ def format_risk_report(report):
         "",
         "## Setup",
         f"- Entry: {format_number(report['entry'])}",
+        f"- Alternative Entry: {format_number(report.get('alternative_entry'))}",
         f"- Stop: {format_number(report['stop'])}",
         f"- Target 1: {format_number(report['target_1'])}",
+        f"- Target 2: {format_number(report.get('target_2'))}",
+        f"- Target 3: {format_number(report.get('target_3'))}",
         f"- Reward/Risk: {format_number(report['reward_to_risk'])}",
+        f"- Reward/Risk to Target 2: {format_number(report.get('reward_to_risk_to_target_2'))}",
+        f"- Pullback Reward/Risk: {format_number(report.get('pullback_reward_to_risk'))}",
         "",
         "## Position Sizing",
     ]
@@ -197,6 +317,9 @@ def format_risk_report(report):
             f"- Max Dollar Risk: {format_number(position['max_dollar_risk'])}",
             f"- Risk Per Share: {format_number(position['risk_per_share'])}",
             f"- Shares: {position['shares']}",
+            f"- Shares by Risk Limit: {position.get('shares_by_risk')}",
+            f"- Shares by Exposure Limit: {position.get('shares_by_exposure')}",
+            f"- Size Limited by Exposure: {position.get('size_limited_by_exposure')}",
             f"- Position Value: {format_number(position['position_value'])}",
             f"- Max Position Value: {format_number(position['max_position_value'])}",
         ])
@@ -216,6 +339,24 @@ def format_risk_report(report):
         "## Vetoes",
     ])
     lines.extend([f"- {item}" for item in report["vetoes"]] or ["- None."])
+
+    lines.extend([
+        "",
+        "## Conditional Issues",
+    ])
+    lines.extend([f"- {item}" for item in report.get("conditional_issues", [])] or ["- None."])
+
+    conditional_plan = report.get("conditional_plan") or {}
+    if conditional_plan:
+        lines.extend([
+            "",
+            "## Conditional Plan",
+            f"- Condition: {conditional_plan.get('condition')}",
+            f"- Suggested Entry: {format_number(conditional_plan.get('suggested_entry'))}",
+            f"- Max Entry for Target 1: {format_number(conditional_plan.get('max_entry_for_target_1'))}",
+            f"- Pullback Entry Viable: {conditional_plan.get('pullback_entry_viable')}",
+            f"- Use Second Target: {conditional_plan.get('use_second_target')}",
+        ])
 
     lines.extend([
         "",

@@ -45,11 +45,12 @@ The `morning today` command:
 1. Runs one shared daily macro read.
 2. Scans the categorized default watchlist in `framework/watchlist.json`.
 3. Runs the CIO committee process for each symbol.
-4. Splits names into Approved Simulated Trades, Worth Watching, and Rejected / Avoid Today.
+4. Splits names into Approved Simulated Trades, Conditional Setups, Watchlist Setups, Rejected / Avoid Today, and Needs Data.
 5. Prints only the top 10 names per section while preserving the full scan in the saved report object.
 6. Summarizes results by category, including AI semiconductors, nuclear/power, space, quantum, healthcare, critical materials, and energy.
 7. Keeps the output watch-only unless Risk approves a paper-trade candidate.
 8. Saves the daily brief in `reports/morning_brief/`.
+9. Surfaces better-entry and pullback conditions instead of treating every imperfect setup as avoid.
 
 The `morning-email today` command:
 

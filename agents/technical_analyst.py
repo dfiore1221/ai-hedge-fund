@@ -70,7 +70,11 @@ def analyze_technical_setup(ticker):
             "stop": levels["stop"],
             "target_1": levels["target_1"],
             "target_2": levels["target_2"],
+            "target_3": levels["target_3"],
             "reward_to_risk": levels["reward_to_risk_to_target_1"],
+            "reward_to_risk_to_target_2": levels["reward_to_risk_to_target_2"],
+            "reward_to_risk_to_target_3": levels["reward_to_risk_to_target_3"],
+            "pullback_reward_to_risk": levels["pullback_reward_to_risk"],
             "no_trade_below": levels["stop"],
             "no_trade_reason": build_no_trade_reason(stance, risks),
         },
@@ -121,6 +125,8 @@ def calculate_levels(rows, indicators):
     invalidation = max(larger_support, latest_close - (2 * atr)) if atr else larger_support
     target_1 = breakout_trigger + (2 * atr) if atr else larger_resistance
     target_2 = max(larger_resistance, breakout_trigger + (3 * atr)) if atr else larger_resistance
+    target_3 = max(target_2, breakout_trigger + (4 * atr)) if atr else larger_resistance
+    pullback_target = max(resistance, target_1)
 
     return {
         "support_20d": support,
@@ -134,7 +140,11 @@ def calculate_levels(rows, indicators):
         "stop": invalidation,
         "target_1": target_1,
         "target_2": target_2,
+        "target_3": target_3,
         "reward_to_risk_to_target_1": reward_to_risk(breakout_trigger, invalidation, target_1),
+        "reward_to_risk_to_target_2": reward_to_risk(breakout_trigger, invalidation, target_2),
+        "reward_to_risk_to_target_3": reward_to_risk(breakout_trigger, invalidation, target_3),
+        "pullback_reward_to_risk": reward_to_risk(pullback_trigger, invalidation, pullback_target),
     }
 
 
@@ -197,9 +207,17 @@ def determine_stance(rows, indicators, levels, relative_strength):
         missing.append("Relative strength versus SPY could not be calculated.")
 
     rr = levels.get("reward_to_risk_to_target_1")
+    rr_to_target_2 = levels.get("reward_to_risk_to_target_2")
+    pullback_rr = levels.get("pullback_reward_to_risk")
     if rr is not None and rr >= 1.5:
         score += 1
         evidence.append("Reward-to-risk to first target is acceptable.")
+    elif rr_to_target_2 is not None and rr_to_target_2 >= 1.5:
+        evidence.append("Reward-to-risk is acceptable only if using the second target.")
+        risks.append("First target does not compensate for the stop distance.")
+    elif pullback_rr is not None and pullback_rr >= 1.5:
+        evidence.append("Pullback entry would create acceptable reward-to-risk.")
+        risks.append("Breakout entry is not attractive enough; wait for a better entry.")
     else:
         risks.append("Reward-to-risk to first target is weak or unavailable.")
 
@@ -207,7 +225,7 @@ def determine_stance(rows, indicators, levels, relative_strength):
         stance = "bullish"
     elif score <= -2:
         stance = "bearish"
-    elif rr is None or rr < 1.2:
+    elif rr is None and pullback_rr is None:
         stance = "no_trade"
     else:
         stance = "neutral"
@@ -291,7 +309,11 @@ def format_technical_report(report):
         f"- Stop / Invalidation: {format_number(levels['stop'])}",
         f"- Target 1: {format_number(levels['target_1'])}",
         f"- Target 2: {format_number(levels['target_2'])}",
+        f"- Target 3: {format_number(levels['target_3'])}",
         f"- Reward/Risk to Target 1: {format_number(levels['reward_to_risk_to_target_1'])}",
+        f"- Reward/Risk to Target 2: {format_number(levels['reward_to_risk_to_target_2'])}",
+        f"- Reward/Risk to Target 3: {format_number(levels['reward_to_risk_to_target_3'])}",
+        f"- Pullback Reward/Risk: {format_number(levels['pullback_reward_to_risk'])}",
         "",
         "## Structured Setup",
         f"- Entry Trigger: {format_number(setup['entry_trigger'])}",
@@ -299,7 +321,10 @@ def format_technical_report(report):
         f"- Stop: {format_number(setup['stop'])}",
         f"- Target 1: {format_number(setup['target_1'])}",
         f"- Target 2: {format_number(setup['target_2'])}",
+        f"- Target 3: {format_number(setup['target_3'])}",
         f"- Reward/Risk: {format_number(setup['reward_to_risk'])}",
+        f"- Reward/Risk to Target 2: {format_number(setup['reward_to_risk_to_target_2'])}",
+        f"- Pullback Reward/Risk: {format_number(setup['pullback_reward_to_risk'])}",
         f"- No-Trade Below: {format_number(setup['no_trade_below'])}",
         f"- No-Trade Reason: {setup['no_trade_reason'] or 'n/a'}",
         "",

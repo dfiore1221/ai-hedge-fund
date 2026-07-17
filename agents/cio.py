@@ -96,10 +96,31 @@ def create_cio_summary(ticker, macro_report=None):
 
 def determine_final_decision(macro_report, technical_report, risk_report, memory_context):
     if risk_report["decision"] == "veto":
+        if has_data_veto(risk_report):
+            return {
+                "status": "NEEDS DATA",
+                "confidence": 0.9,
+                "reason": "Market data or setup data was unavailable, so the committee cannot form a useful view.",
+            }
         return {
             "status": "NO TRADE",
             "confidence": 0.85,
             "reason": "Risk Manager veto has authority over trade approval.",
+        }
+
+    if risk_report["decision"] == "conditional_setup":
+        plan = risk_report.get("conditional_plan") or {}
+        return {
+            "status": "CONDITIONAL SETUP",
+            "confidence": 0.55,
+            "reason": plan.get("condition") or "Setup is interesting but requires a better entry, target, or confirmation.",
+        }
+
+    if risk_report["decision"] == "watchlist_setup":
+        return {
+            "status": "WATCHLIST SETUP",
+            "confidence": 0.45,
+            "reason": "Interesting enough to monitor, but not structured well enough for a simulated trade.",
         }
 
     regime = macro_report["assessment"]["market_regime"]
@@ -109,7 +130,7 @@ def determine_final_decision(macro_report, technical_report, risk_report, memory
 
     if regime == "Risk-Off" and technical_stance != "bullish":
         return {
-            "status": "WATCH ONLY",
+            "status": "WATCHLIST SETUP",
             "confidence": 0.7,
             "reason": "Macro backdrop is risk-off and technical stance is not bullish.",
         }
@@ -122,21 +143,32 @@ def determine_final_decision(macro_report, technical_report, risk_report, memory
         }
 
     return {
-        "status": "WATCH ONLY",
+        "status": "WATCHLIST SETUP",
         "confidence": 0.55,
         "reason": "Evidence is not strong enough for a paper trade, but monitoring is justified.",
     }
 
 
+def has_data_veto(risk_report):
+    veto_text = " ".join(risk_report.get("vetoes", [])).lower()
+    return "no reliable data" in veto_text or "missing entry" in veto_text
+
+
 def build_trade_plan(technical_report, risk_report, decision):
     position = risk_report.get("position") or {}
+    conditional_plan = risk_report.get("conditional_plan") or {}
 
     return {
         "symbol": technical_report.get("symbol"),
         "action": decision["status"],
         "entry_trigger": risk_report.get("entry"),
+        "alternative_entry": risk_report.get("alternative_entry"),
+        "suggested_entry": conditional_plan.get("suggested_entry"),
+        "condition": conditional_plan.get("condition"),
         "stop": risk_report.get("stop"),
         "target_1": risk_report.get("target_1"),
+        "target_2": risk_report.get("target_2"),
+        "target_3": risk_report.get("target_3"),
         "position_size_shares": position.get("shares"),
         "max_dollar_risk": position.get("max_dollar_risk"),
         "time_horizon": technical_report.get("time_horizon"),
@@ -236,8 +268,13 @@ def format_cio_report(report):
         "## Trade Plan",
         f"- Action: {plan['action']}",
         f"- Entry Trigger: {format_number(plan['entry_trigger'])}",
+        f"- Alternative Entry: {format_number(plan.get('alternative_entry'))}",
+        f"- Suggested Entry: {format_number(plan.get('suggested_entry'))}",
+        f"- Condition: {plan.get('condition') or 'n/a'}",
         f"- Stop: {format_number(plan['stop'])}",
         f"- Target 1: {format_number(plan['target_1'])}",
+        f"- Target 2: {format_number(plan.get('target_2'))}",
+        f"- Target 3: {format_number(plan.get('target_3'))}",
         f"- Position Size: {plan['position_size_shares'] if plan['position_size_shares'] is not None else 'n/a'} shares",
         f"- Max Dollar Risk: {format_number(plan['max_dollar_risk'])}",
         f"- Time Horizon: {plan['time_horizon'] or 'n/a'}",

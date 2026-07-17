@@ -90,11 +90,12 @@ def render_morning_brief():
 
     metrics = parse_morning_metrics(brief)
     with col_b:
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Market Regime", metrics.get("market_regime", "n/a"))
         c2.metric("Symbols", metrics.get("symbols_scanned", "n/a"))
         c3.metric("Paper Trades", metrics.get("paper_trade_candidates", "n/a"))
-        c4.metric("Watch Only", metrics.get("watch_only_candidates", "n/a"))
+        c4.metric("Conditional", metrics.get("conditional_setups", "n/a"))
+        c5.metric("Watchlist", metrics.get("watchlist_setups", "n/a"))
 
     st.markdown(brief)
 
@@ -391,7 +392,8 @@ def parse_morning_metrics(text):
         "market_regime": r"Market Regime:\s*([^(\n]+)",
         "symbols_scanned": r"Symbols Scanned:\s*(\d+)",
         "paper_trade_candidates": r"Paper-Trade Candidates:\s*(\d+)",
-        "watch_only_candidates": r"Watch-Only Candidates:\s*(\d+)",
+        "conditional_setups": r"Conditional Setups:\s*(\d+)",
+        "watchlist_setups": r"Watchlist Setups:\s*(\d+)",
     }
     metrics = {}
     for key, pattern in patterns.items():

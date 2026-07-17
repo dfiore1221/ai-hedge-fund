@@ -86,15 +86,25 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
         for summary in ranked
         if summary.get("final_decision", {}).get("status") == "PAPER TRADE ONLY"
     ]
+    conditional = [
+        summary
+        for summary in ranked
+        if summary.get("final_decision", {}).get("status") == "CONDITIONAL SETUP"
+    ]
     watch = [
         summary
         for summary in ranked
-        if summary.get("final_decision", {}).get("status") == "WATCH ONLY"
+        if summary.get("final_decision", {}).get("status") == "WATCHLIST SETUP"
     ]
     rejected = [
         summary
         for summary in ranked
         if summary.get("final_decision", {}).get("status") == "NO TRADE"
+    ]
+    needs_data = [
+        summary
+        for summary in ranked
+        if summary.get("final_decision", {}).get("status") == "NEEDS DATA"
     ]
 
     return {
@@ -105,8 +115,10 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
         "symbols_scanned": symbols,
         "top_n": max_ideas,
         "approved_simulated_trades": [summarize_idea(summary) for summary in approved[:max_ideas]],
+        "conditional_setups": [summarize_idea(summary) for summary in conditional[:max_ideas]],
         "worth_watching": [summarize_idea(summary) for summary in watch[:max_ideas]],
         "rejected_or_avoid": [summarize_idea(summary) for summary in rejected[:max_ideas]],
+        "needs_data": [summarize_idea(summary) for summary in needs_data[:max_ideas]],
         "ideas": [summarize_idea(summary) for summary in ranked[:max_ideas]],
         "category_summary": build_category_summary(summaries),
         "committee_summaries": summaries,
@@ -164,13 +176,21 @@ def score_candidate(summary):
 
     if decision.get("status") == "PAPER TRADE ONLY":
         score += 40
-    elif decision.get("status") == "WATCH ONLY":
-        score += 22
+    elif decision.get("status") == "CONDITIONAL SETUP":
+        score += 30
+    elif decision.get("status") == "WATCHLIST SETUP":
+        score += 20
     elif decision.get("status") == "NO TRADE":
-        score += 5
+        score -= 5
+    elif decision.get("status") == "NEEDS DATA":
+        score -= 25
 
     if risk_decision == "approved_for_paper_trade":
         score += 18
+    elif risk_decision == "conditional_setup":
+        score += 10
+    elif risk_decision == "watchlist_setup":
+        score += 4
     elif risk_decision == "veto":
         score -= 20
 
@@ -222,6 +242,10 @@ def get_reward_to_risk(summary):
     risk = source_reports.get("risk") or {}
     if risk.get("reward_to_risk") is not None:
         return risk["reward_to_risk"]
+    if risk.get("reward_to_risk_to_target_2") is not None:
+        return risk["reward_to_risk_to_target_2"]
+    if risk.get("pullback_reward_to_risk") is not None:
+        return risk["pullback_reward_to_risk"]
 
     technical = source_reports.get("technical") or {}
     setup = technical.get("setup") or {}
@@ -247,8 +271,12 @@ def summarize_idea(summary):
         "risk_decision": summary.get("risk_decision"),
         "reward_to_risk": get_reward_to_risk(summary),
         "entry_trigger": risk.get("entry") or (technical.get("setup") or {}).get("entry_trigger"),
+        "suggested_entry": (risk.get("conditional_plan") or {}).get("suggested_entry"),
+        "condition": (risk.get("conditional_plan") or {}).get("condition"),
         "stop": risk.get("stop") or (technical.get("setup") or {}).get("stop"),
         "target_1": risk.get("target_1") or (technical.get("setup") or {}).get("target_1"),
+        "target_2": risk.get("target_2") or (technical.get("setup") or {}).get("target_2"),
+        "target_3": risk.get("target_3") or (technical.get("setup") or {}).get("target_3"),
         "backtest_expectancy": backtest.get("expectancy_pct"),
         "backtest_sample_size": backtest.get("sample_size"),
         "thesis_rating": thesis.get("rating"),
@@ -266,6 +294,12 @@ def build_idea_reason(summary):
 
     if summary.get("risk_decision") == "approved_for_paper_trade":
         reasons.append("risk checks passed")
+    elif summary.get("risk_decision") == "conditional_setup":
+        plan = risk.get("conditional_plan") or {}
+        reasons.append(plan.get("condition") or "conditional setup")
+    elif summary.get("risk_decision") == "watchlist_setup":
+        issues = risk.get("conditional_issues") or []
+        reasons.append(issues[0] if issues else "watchlist setup")
     elif risk.get("vetoes"):
         reasons.append(f"risk veto: {risk['vetoes'][0]}")
 
@@ -303,18 +337,24 @@ def build_category_summary(summaries):
                 "category": category,
                 "symbols": 0,
                 "paper_trade": 0,
-                "watch_only": 0,
+                "conditional": 0,
+                "watchlist": 0,
                 "no_trade": 0,
+                "needs_data": 0,
                 "errors": 0,
             }
 
         categories[category]["symbols"] += 1
         if decision == "PAPER TRADE ONLY":
             categories[category]["paper_trade"] += 1
-        elif decision == "WATCH ONLY":
-            categories[category]["watch_only"] += 1
+        elif decision == "CONDITIONAL SETUP":
+            categories[category]["conditional"] += 1
+        elif decision == "WATCHLIST SETUP":
+            categories[category]["watchlist"] += 1
         elif decision == "NO TRADE":
             categories[category]["no_trade"] += 1
+        elif decision == "NEEDS DATA":
+            categories[category]["needs_data"] += 1
         else:
             categories[category]["errors"] += 1
 
@@ -350,8 +390,10 @@ def format_morning_brief(report):
         f"- Macro Confidence: {assessment['confidence_score']}/100",
         f"- Symbols Scanned: {len(report['symbols_scanned'])}",
         f"- Paper-Trade Candidates: {count_decisions(summaries, 'PAPER TRADE ONLY')}",
-        f"- Watch-Only Candidates: {count_decisions(summaries, 'WATCH ONLY')}",
+        f"- Conditional Setups: {count_decisions(summaries, 'CONDITIONAL SETUP')}",
+        f"- Watchlist Setups: {count_decisions(summaries, 'WATCHLIST SETUP')}",
         f"- No-Trade / Avoid Today: {count_decisions(summaries, 'NO TRADE')}",
+        f"- Needs Data: {count_decisions(summaries, 'NEEDS DATA')}",
         "",
         "## Approved Simulated Trades",
     ]
@@ -360,7 +402,18 @@ def format_morning_brief(report):
 
     lines.extend([
         "",
-        f"## Worth Watching (Top {top_n})",
+        f"## Conditional Setups (Top {top_n})",
+    ])
+    append_idea_section(
+        lines,
+        report["conditional_setups"],
+        empty_text="None today.",
+        show_guardrail=True,
+    )
+
+    lines.extend([
+        "",
+        f"## Watchlist Setups (Top {top_n})",
     ])
     append_idea_section(
         lines,
@@ -388,8 +441,9 @@ def format_morning_brief(report):
     for category in report.get("category_summary", []):
         lines.append(
             f"- {category['category']}: {category['symbols']} scanned | "
-            f"paper {category['paper_trade']} | watch {category['watch_only']} | "
-            f"no trade {category['no_trade']} | errors {category['errors']}"
+            f"paper {category['paper_trade']} | conditional {category['conditional']} | "
+            f"watchlist {category['watchlist']} | no trade {category['no_trade']} | "
+            f"needs data {category['needs_data']} | errors {category['errors']}"
         )
 
     errors = [summary for summary in summaries if summary.get("error")]
@@ -403,7 +457,8 @@ def format_morning_brief(report):
         "",
         "## Guardrails",
         "- This is a watch-only research brief, not a live trade instruction.",
-        "- Risk vetoes override bullish thesis, options flow, or news clues.",
+        "- Hard Risk vetoes override bullish thesis, options flow, or news clues.",
+        "- Conditional setups require the stated entry, target, or confirmation before simulated trade approval.",
         "- Any paper trade still requires human review before action.",
         "",
         "## Missing Information",
@@ -427,9 +482,17 @@ def append_idea_section(lines, ideas, empty_text, show_guardrail=False):
         lines.append(f"   - Why: {idea['reason'] or 'No clear positive setup.'}")
         lines.append(
             f"   - Setup: entry {format_number(idea['entry_trigger'])}, "
+            f"suggested {format_number(idea.get('suggested_entry'))}, "
             f"stop {format_number(idea['stop'])}, target {format_number(idea['target_1'])}, "
             f"reward/risk {format_number(idea['reward_to_risk'])}"
         )
+        if idea.get("condition"):
+            lines.append(f"   - Condition: {idea['condition']}")
+        if idea.get("target_2") or idea.get("target_3"):
+            lines.append(
+                f"   - Extra targets: target 2 {format_number(idea.get('target_2'))}, "
+                f"target 3 {format_number(idea.get('target_3'))}"
+            )
         lines.append(
             f"   - Backtest: expectancy {format_number(idea['backtest_expectancy'])}%, "
             f"sample {idea['backtest_sample_size'] if idea['backtest_sample_size'] is not None else 'n/a'}"
