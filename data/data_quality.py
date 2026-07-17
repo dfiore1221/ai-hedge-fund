@@ -5,6 +5,7 @@ import io
 from datetime import date, datetime
 from pathlib import Path
 
+from data.economic_calendar import get_economic_calendar
 from data.fred_data import get_fred_macro_snapshot
 
 
@@ -101,13 +102,20 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
     symbols = [entry["symbol"] for entry in watchlist_entries]
     providers = build_provider_statuses()
     fred_snapshot = get_fred_macro_snapshot()
+    economic_calendar = get_economic_calendar()
     live_price_checks = []
 
     if live_checks:
         for symbol in symbols[:live_check_limit]:
             live_price_checks.append(check_price_history(symbol))
 
-    domain_scores = score_domains(providers, live_price_checks, live_checks, fred_snapshot)
+    domain_scores = score_domains(
+        providers,
+        live_price_checks,
+        live_checks,
+        fred_snapshot,
+        economic_calendar,
+    )
     quality_score = sum(item["score"] for item in domain_scores.values())
     gate = classify_gate(quality_score, domain_scores, live_price_checks, live_checks)
 
@@ -121,6 +129,7 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
         "live_price_checks": live_price_checks,
         "providers": providers,
         "official_macro": fred_snapshot,
+        "economic_calendar": economic_calendar,
         "domain_scores": domain_scores,
         "data_quality_score": quality_score,
         "gate": gate,
@@ -227,7 +236,13 @@ def check_price_history(symbol):
     }
 
 
-def score_domains(providers, live_price_checks, live_checks, fred_snapshot=None):
+def score_domains(
+    providers,
+    live_price_checks,
+    live_checks,
+    fred_snapshot=None,
+    economic_calendar=None,
+):
     provider_names = {provider["name"]: provider for provider in providers}
     configured_names = {
         provider["name"]
@@ -236,10 +251,16 @@ def score_domains(providers, live_price_checks, live_checks, fred_snapshot=None)
     }
     market_provider_configured = bool({"Alpaca", "Polygon", "Databento"} & configured_names)
     news_provider_configured = bool({"Benzinga", "Finnhub"} & configured_names)
-    event_provider_configured = bool({"Trading Economics", "Finnhub", "Benzinga"} & configured_names)
+    economic_calendar_ok = bool(
+        economic_calendar and economic_calendar.get("status") in {"ok", "partial"}
+    )
+    event_provider_configured = (
+        economic_calendar_ok
+        or bool({"Finnhub", "Benzinga"} & configured_names)
+    )
     options_provider_configured = bool({"Tradier", "ORATS", "Polygon", "Alpaca", "Databento"} & configured_names)
     fred_ok = bool(fred_snapshot and fred_snapshot.get("status") in {"ok", "partial"})
-    macro_provider_configured = fred_ok or bool({"Trading Economics"} & configured_names)
+    macro_provider_configured = fred_ok or economic_calendar_ok
     sec_configured = provider_names["SEC EDGAR"]["configured"]
 
     if live_checks:
@@ -265,7 +286,7 @@ def score_domains(providers, live_price_checks, live_checks, fred_snapshot=None)
             "score": 15 if event_provider_configured else 5,
             "max_score": 15,
             "status": "strong" if event_provider_configured else "starter",
-            "detail": "Event provider configured." if event_provider_configured else "Only starter Yahoo earnings checks are available.",
+            "detail": build_event_context_detail(economic_calendar, event_provider_configured),
         },
         "news_analyst": {
             "score": 15 if news_provider_configured else 5,
@@ -283,7 +304,7 @@ def score_domains(providers, live_price_checks, live_checks, fred_snapshot=None)
             "score": 10 if macro_provider_configured else 4,
             "max_score": 10,
             "status": "strong" if macro_provider_configured else "starter",
-            "detail": build_macro_context_detail(fred_snapshot, macro_provider_configured),
+            "detail": build_macro_context_detail(fred_snapshot, economic_calendar, macro_provider_configured),
         },
         "provider_agreement_checks": {
             "score": 10 if market_provider_configured and live_checks else 4 if live_checks else 2,
@@ -326,12 +347,38 @@ def build_coverage(live_price_checks, watchlist_count, live_checks):
     }
 
 
-def build_macro_context_detail(fred_snapshot, macro_provider_configured):
-    if not fred_snapshot or fred_snapshot.get("status") == "not_configured":
-        return "Current macro layer uses market proxies; official macro APIs not configured."
-    if fred_snapshot.get("status") in {"ok", "partial"}:
-        return f"FRED official macro data available ({fred_snapshot.get('status')})."
-    return fred_snapshot.get("error") or "FRED official macro data could not be verified."
+def build_event_context_detail(economic_calendar, event_provider_configured):
+    if economic_calendar and economic_calendar.get("status") in {"ok", "partial"}:
+        summary = economic_calendar.get("summary") or {}
+        return (
+            "Trading Economics economic calendar available "
+            f"({summary.get('event_count', 0)} events in window)."
+        )
+    if economic_calendar and economic_calendar.get("error"):
+        return economic_calendar["error"]
+    if event_provider_configured:
+        return "Event provider configured."
+    return "Only starter Yahoo earnings checks are available."
+
+
+def build_macro_context_detail(fred_snapshot, economic_calendar, macro_provider_configured):
+    details = []
+
+    if fred_snapshot and fred_snapshot.get("status") in {"ok", "partial"}:
+        details.append(f"FRED official macro data available ({fred_snapshot.get('status')}).")
+    elif fred_snapshot and fred_snapshot.get("error") and fred_snapshot.get("status") != "not_configured":
+        details.append(fred_snapshot["error"])
+
+    if economic_calendar and economic_calendar.get("status") in {"ok", "partial"}:
+        details.append(f"Trading Economics event calendar available ({economic_calendar.get('status')}).")
+    elif economic_calendar and economic_calendar.get("error") and economic_calendar.get("status") != "not_configured":
+        details.append(economic_calendar["error"])
+
+    if details:
+        return " ".join(details)
+    if macro_provider_configured:
+        return "Macro/event provider configured."
+    return "Current macro layer uses market proxies; official macro APIs not configured."
 
 
 def classify_gate(quality_score, domain_scores, live_price_checks, live_checks):
@@ -443,6 +490,21 @@ def format_data_health_report(report):
         lines.append(
             f"- {provider['name']}: {provider['status']} [{env_label}] - {provider['domain']}"
         )
+
+    lines.extend(["", "## Economic Calendar"])
+    economic_calendar = report.get("economic_calendar") or {}
+    if economic_calendar.get("status") == "not_configured":
+        lines.append("- Trading Economics: not configured.")
+    elif economic_calendar.get("error"):
+        lines.append(f"- Trading Economics: {economic_calendar['error']}")
+    else:
+        summary = economic_calendar.get("summary") or {}
+        lines.extend([
+            f"- Trading Economics: {economic_calendar.get('status')}",
+            f"- Window: {economic_calendar.get('start_date')} to {economic_calendar.get('end_date')}",
+            f"- Events: {summary.get('event_count', 0)}",
+            f"- High-Importance Events: {summary.get('high_importance_count', 0)}",
+        ])
 
     if report["live_checks_enabled"]:
         lines.extend(["", "## Live Price Checks"])

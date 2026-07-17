@@ -1,6 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
+from data.economic_calendar import format_calendar_event, get_economic_calendar
 from data.fred_data import get_fred_macro_snapshot
 from data.market_data import get_macro_market_snapshot, get_sector_rotation_snapshot
 
@@ -12,19 +13,21 @@ REPORTS_DIR = PROJECT_ROOT / "reports" / "market_intelligence"
 def generate_daily_market_intelligence():
     macro = get_macro_market_snapshot()
     official_macro = get_fred_macro_snapshot()
+    economic_calendar = get_economic_calendar()
     sector_rotation = get_sector_rotation_snapshot()
-    assessment = assess_market_regime(macro, sector_rotation, official_macro)
+    assessment = assess_market_regime(macro, sector_rotation, official_macro, economic_calendar)
 
     return {
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "macro": macro,
         "official_macro": official_macro,
+        "economic_calendar": economic_calendar,
         "sector_rotation": sector_rotation,
         "assessment": assessment,
     }
 
 
-def assess_market_regime(macro, sector_rotation, official_macro=None):
+def assess_market_regime(macro, sector_rotation, official_macro=None, economic_calendar=None):
     signals = []
 
     sp500 = macro.get("sp500", {})
@@ -47,6 +50,7 @@ def assess_market_regime(macro, sector_rotation, official_macro=None):
     add_signal(signals, "Oil 20-day trend", oil.get("twenty_day_change_pct"), positive_above=0, weight=0.5)
     add_signal(signals, "Bitcoin 20-day trend", bitcoin.get("twenty_day_change_pct"), positive_above=0, weight=0.5)
     add_official_macro_signals(signals, official_macro)
+    add_economic_calendar_signal(signals, economic_calendar)
 
     risk_on_sectors = {"Technology", "Consumer Discretionary", "Communication Services", "Industrials", "Financials"}
     defensive_sectors = {"Utilities", "Consumer Staples", "Healthcare"}
@@ -110,6 +114,48 @@ def add_official_macro_signals(signals, official_macro):
     add_inverse_signal(signals, "FRED CPI YoY", cpi_yoy, positive_below=3.0, weight=0.75)
     add_inverse_signal(signals, "FRED unemployment rate", unemployment, positive_below=5.0, weight=0.75)
     add_signal(signals, "FRED real GDP YoY", gdp_yoy, positive_above=1.5, weight=0.75)
+
+
+def add_economic_calendar_signal(signals, economic_calendar):
+    if not economic_calendar or economic_calendar.get("status") == "not_configured":
+        signals.append({
+            "name": "Economic calendar event risk",
+            "value": "not configured",
+            "score": 0,
+            "weight": 0,
+        })
+        return
+
+    if economic_calendar.get("error"):
+        signals.append({
+            "name": "Economic calendar event risk",
+            "value": economic_calendar["error"],
+            "score": 0,
+            "weight": 0.5,
+        })
+        return
+
+    summary = economic_calendar.get("summary") or {}
+    high_today = summary.get("high_importance_events_today") or []
+    next_event = summary.get("next_high_importance_event")
+    high_count = summary.get("high_importance_count") or 0
+
+    if high_today:
+        score = -1
+        value = f"{len(high_today)} high-importance event(s) today"
+    elif next_event:
+        score = 0
+        value = f"next: {format_calendar_event(next_event)}"
+    else:
+        score = 1
+        value = f"{high_count} high-importance event(s) in window"
+
+    signals.append({
+        "name": "Economic calendar event risk",
+        "value": value,
+        "score": score,
+        "weight": 0.5,
+    })
 
 
 def extract_summary_value(summary, key):
@@ -218,6 +264,26 @@ def format_market_intelligence_report(report):
                 f"- {item['name']} ({item['id']}): "
                 f"{format_value(item.get('value'))} as of {item.get('date')}"
             )
+
+    lines.extend([
+        "",
+        "## Economic Calendar",
+    ])
+
+    economic_calendar = report.get("economic_calendar") or {}
+    if economic_calendar.get("status") == "not_configured":
+        lines.append("- Trading Economics: not configured. Add TRADING_ECONOMICS_API_KEY to .env to enable economic event risk.")
+    elif economic_calendar.get("error"):
+        lines.append(f"- Trading Economics: {economic_calendar['error']}")
+    else:
+        summary = economic_calendar.get("summary") or {}
+        lines.append(f"- Trading Economics status: {economic_calendar.get('status')}")
+        lines.append(f"- Window: {economic_calendar.get('start_date')} to {economic_calendar.get('end_date')}")
+        lines.append(f"- Events: {summary.get('event_count', 0)} total; {summary.get('high_importance_count', 0)} high-importance.")
+        next_event = summary.get("next_high_importance_event")
+        lines.append(f"- Next High-Importance Event: {format_calendar_event(next_event)}")
+        for event in (economic_calendar.get("high_importance_events") or [])[:8]:
+            lines.append(f"- {format_calendar_event(event)}")
 
     lines.extend([
         "",

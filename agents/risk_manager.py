@@ -1,8 +1,9 @@
 import json
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from agents.technical_analyst import analyze_technical_setup
+from data.economic_calendar import format_calendar_event, get_economic_calendar
 from data.earnings_calendar import get_earnings_calendar
 from data.portfolio import analyze_portfolio_exposure
 
@@ -21,6 +22,7 @@ def evaluate_trade_risk(ticker, technical_report=None, policy=None):
     policy = policy or load_risk_policy()
     technical_report = technical_report or analyze_technical_setup(ticker)
     earnings = get_earnings_calendar(ticker)
+    economic_calendar = get_economic_calendar(days_ahead=7, days_back=0)
     portfolio_exposure = analyze_portfolio_exposure(
         ticker,
         correlated_symbols=policy["ai_semi_correlated_symbols"],
@@ -90,6 +92,9 @@ def evaluate_trade_risk(ticker, technical_report=None, policy=None):
     elif 0 <= earnings_days <= 14:
         warnings.append(f"Earnings are within {earnings_days} days; reduce confidence or require explicit approval.")
 
+    calendar_missing_information = []
+    evaluate_economic_event_risk(economic_calendar, warnings, calendar_missing_information)
+
     if portfolio_exposure["correlated_exposure_pct"] > 40:
         vetoes.append(
             f"Correlated AI/semi exposure is {portfolio_exposure['correlated_exposure_pct']:.2f}%, above 40% limit."
@@ -143,6 +148,7 @@ def evaluate_trade_risk(ticker, technical_report=None, policy=None):
         "pullback_reward_to_risk": pullback_reward_to_risk,
         "position": position,
         "earnings": earnings,
+        "economic_calendar": economic_calendar,
         "portfolio_exposure": portfolio_exposure,
         "vetoes": vetoes,
         "conditional_issues": conditional_issues,
@@ -150,10 +156,51 @@ def evaluate_trade_risk(ticker, technical_report=None, policy=None):
         "warnings": warnings,
         "missing_information": [
             "Daily and weekly realized P&L limits are not connected yet.",
-            "Economic event calendar is not connected yet.",
+            *calendar_missing_information,
         ],
         "citations": technical_report.get("citations", []),
     }
+
+
+def evaluate_economic_event_risk(economic_calendar, warnings, missing_information):
+    if not economic_calendar or economic_calendar.get("status") == "not_configured":
+        missing_information.append("Economic event calendar is not connected yet.")
+        return
+
+    if economic_calendar.get("error"):
+        warnings.append(f"Economic event calendar unavailable: {economic_calendar['error']}")
+        return
+
+    summary = economic_calendar.get("summary") or {}
+    high_today = summary.get("high_importance_events_today") or []
+    next_event = summary.get("next_high_importance_event")
+
+    if high_today:
+        warnings.append(
+            "High-importance macro event risk today; require explicit approval for new swing trades."
+        )
+        return
+
+    if not next_event:
+        return
+
+    days_until = days_until_event(next_event)
+    if days_until is not None and 0 <= days_until <= 2:
+        warnings.append(
+            f"High-importance macro event within {days_until} day(s): "
+            f"{format_calendar_event(next_event)}."
+        )
+
+
+def days_until_event(event):
+    raw_date = event.get("date")
+    if not raw_date:
+        return None
+    try:
+        event_date = datetime.fromisoformat(raw_date).date()
+    except ValueError:
+        return None
+    return (event_date - date.today()).days
 
 
 def calculate_position_size(entry, stop, policy):
@@ -331,6 +378,25 @@ def format_risk_report(report):
         "## Event Risk",
         f"- Earnings Date: {report.get('earnings', {}).get('earnings_date') or 'n/a'}",
         f"- Days Until Earnings: {report.get('earnings', {}).get('days_until_earnings') if report.get('earnings', {}).get('days_until_earnings') is not None else 'n/a'}",
+    ])
+
+    economic_calendar = report.get("economic_calendar") or {}
+    if not economic_calendar:
+        lines.append("- Economic Calendar: n/a")
+    elif economic_calendar.get("status") == "not_configured":
+        lines.append("- Economic Calendar: not configured")
+    elif economic_calendar.get("error"):
+        lines.append(f"- Economic Calendar: {economic_calendar['error']}")
+    else:
+        summary = economic_calendar.get("summary") or {}
+        lines.extend([
+            f"- Economic Calendar: {economic_calendar.get('status')}",
+            f"- Calendar Window: {economic_calendar.get('start_date')} to {economic_calendar.get('end_date')}",
+            f"- High-Importance Events: {summary.get('high_importance_count', 0)}",
+            f"- Next High-Importance Event: {format_calendar_event(summary.get('next_high_importance_event'))}",
+        ])
+
+    lines.extend([
         "",
         "## Portfolio Exposure",
         f"- Current Symbol Exposure: {format_number(report.get('portfolio_exposure', {}).get('current_symbol_exposure_pct'))}%",
