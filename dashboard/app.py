@@ -309,7 +309,11 @@ def render_trade_journal():
     c5.metric("Open Risk", money(summary["open_planned_risk"]))
     c6.metric("Avg R", f"{summary['avg_r_multiple']:.2f}")
 
-    st.caption(f"Win rate: {summary['win_rate']:.1f}%")
+    st.caption(
+        f"Win rate: {summary['win_rate']:.1f}% | "
+        f"Today realized: {money(summary['today_realized_pnl'])} | "
+        f"Week realized: {money(summary['week_realized_pnl'])}"
+    )
 
     with st.expander("Add Simulated Trade", expanded=False):
         with st.form("add_trade"):

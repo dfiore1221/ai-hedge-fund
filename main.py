@@ -168,13 +168,12 @@ def portfolio(ticker):
 
 
 def journal(action):
-    if action.lower() != "summary":
-        raise ValueError("Journal command currently supports: summary")
-
     try:
         from data.trade_journal import (
+            close_trade,
             format_trade_journal_summary,
             load_trade_journal,
+            open_trade_from_plan,
             summarize_trade_journal,
         )
     except ModuleNotFoundError as exc:
@@ -182,7 +181,63 @@ def journal(action):
             "A required package is missing. Run `pip install -r requirements.txt` and try again."
         ) from exc
 
-    print(format_trade_journal_summary(summarize_trade_journal(load_trade_journal())))
+    action = action.lower()
+
+    if action == "summary":
+        print(format_trade_journal_summary(summarize_trade_journal(load_trade_journal())))
+        return
+
+    if action == "open":
+        if len(sys.argv) < 8:
+            raise ValueError(
+                "Usage: python3 main.py journal open SYMBOL ENTRY STOP TARGET SHARES "
+                "[--side long|short] [--status planned|open] [--run-id RUN_ID]"
+            )
+        symbol = normalize_ticker(sys.argv[3])
+        trade_id = open_trade_from_plan(
+            symbol=symbol,
+            entry=float(sys.argv[4]),
+            stop=float(sys.argv[5]),
+            target=float(sys.argv[6]),
+            shares=int(float(sys.argv[7])),
+            side=get_cli_option("--side", "long"),
+            status=get_cli_option("--status", "planned"),
+            setup_type=get_cli_option("--setup-type", "manual"),
+            source=get_cli_option("--source", "manual"),
+            agent_run_id=get_cli_option("--run-id", ""),
+            thesis=get_cli_option("--thesis", ""),
+            notes=get_cli_option("--notes", ""),
+        )
+        print(f"Saved simulated trade: {trade_id}")
+        print(format_trade_journal_summary(summarize_trade_journal(load_trade_journal())))
+        return
+
+    if action == "close":
+        if len(sys.argv) < 5:
+            raise ValueError(
+                "Usage: python3 main.py journal close TRADE_ID EXIT_PRICE "
+                "[--reason TEXT] [--lessons TEXT]"
+            )
+        trade = close_trade(
+            trade_id=sys.argv[3],
+            exit_price=float(sys.argv[4]),
+            exit_reason=get_cli_option("--reason", ""),
+            lessons=get_cli_option("--lessons", ""),
+        )
+        print(f"Closed simulated trade: {trade['id']} ({trade['symbol']})")
+        print(format_trade_journal_summary(summarize_trade_journal(load_trade_journal())))
+        return
+
+    raise ValueError("Journal command supports: summary, open, close")
+
+
+def get_cli_option(name, default=""):
+    if name not in sys.argv:
+        return default
+    index = sys.argv.index(name)
+    if index + 1 >= len(sys.argv):
+        return default
+    return sys.argv[index + 1]
 
 
 def feedback(action):
@@ -465,6 +520,8 @@ def main():
         print("  python3 main.py earnings MSFT")
         print("  python3 main.py portfolio MSFT")
         print("  python3 main.py journal summary")
+        print("  python3 main.py journal open MSFT 400 380 430 10 --status planned --run-id RUN_ID")
+        print("  python3 main.py journal close TRADE_ID 425 --reason target")
         print("  python3 main.py feedback summary")
         print("  python3 main.py security check")
         print("  python3 main.py data-health today")

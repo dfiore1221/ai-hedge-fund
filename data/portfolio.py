@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from data.trade_journal import OPEN_STATUSES, enrich_trade_metrics, load_trade_journal, to_float
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PORTFOLIO_PATH = PROJECT_ROOT / "portfolio" / "holdings.json"
@@ -32,10 +34,12 @@ def default_portfolio():
     }
 
 
-def analyze_portfolio_exposure(ticker=None, portfolio=None, correlated_symbols=None):
+def analyze_portfolio_exposure(ticker=None, portfolio=None, correlated_symbols=None, include_journal=True):
     portfolio = portfolio or load_portfolio()
     correlated_symbols = set(correlated_symbols or [])
-    positions = portfolio.get("positions", [])
+    positions = list(portfolio.get("positions", []))
+    if include_journal:
+        positions.extend(journal_positions())
     total_value = portfolio.get("cash", 0) + sum(position_value(position) for position in positions)
 
     symbol = ticker.upper().strip() if ticker else None
@@ -65,7 +69,38 @@ def analyze_portfolio_exposure(ticker=None, portfolio=None, correlated_symbols=N
 
 
 def position_value(position):
-    return float(position.get("quantity", 0)) * float(position.get("last_price", position.get("cost_basis", 0)))
+    quantity = float(position.get("quantity", 0))
+    price = float(position.get("last_price", position.get("cost_basis", 0)))
+    return abs(quantity * price)
+
+
+def journal_positions():
+    journal = enrich_trade_metrics(load_trade_journal())
+    if journal.empty:
+        return []
+
+    positions = []
+    for _, trade in journal.iterrows():
+        if str(trade.get("status", "")).lower() not in OPEN_STATUSES:
+            continue
+        symbol = str(trade.get("symbol", "")).upper().strip()
+        shares = to_float(trade.get("shares"))
+        if not symbol or not shares:
+            continue
+        entry = to_float(trade.get("entry"))
+        current_price = to_float(trade.get("current_price")) or entry
+        side = str(trade.get("side", "long")).lower()
+        signed_quantity = -shares if side == "short" else shares
+        positions.append({
+            "symbol": symbol,
+            "quantity": signed_quantity,
+            "cost_basis": entry,
+            "last_price": current_price,
+            "source": "trade_journal",
+            "status": trade.get("status"),
+            "trade_id": trade.get("id"),
+        })
+    return positions
 
 
 def pct(value, total):

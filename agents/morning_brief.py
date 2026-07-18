@@ -7,6 +7,7 @@ from pathlib import Path
 from agents.cio import create_cio_summary
 from agents.market_intelligence import generate_daily_market_intelligence
 from data.data_quality import generate_data_health_report
+from data.trade_journal import load_trade_journal, summarize_trade_journal
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +65,7 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
     metadata_by_symbol = {entry["symbol"]: entry for entry in entries}
     data_health = generate_data_health_report(symbols=symbols, live_checks=True)
     macro_report = generate_daily_market_intelligence()
+    journal_summary = summarize_trade_journal(load_trade_journal())
     summaries = []
 
     for symbol in symbols:
@@ -114,6 +116,7 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "mode": "watch_only",
         "data_health": data_health,
+        "journal_summary": journal_summary,
         "macro": macro_report,
         "symbols_scanned": symbols,
         "top_n": max_ideas,
@@ -406,6 +409,7 @@ def format_morning_brief(report):
     top_n = report.get("top_n", DEFAULT_TOP_N)
     data_health = report.get("data_health") or {}
     data_gate = data_health.get("gate") or {}
+    journal_summary = report.get("journal_summary") or {}
 
     lines = [
         "# AI Hedge Fund Morning Brief",
@@ -428,6 +432,15 @@ def format_morning_brief(report):
         f"- Status: {data_gate.get('status', 'n/a')}",
         f"- Decision: {data_gate.get('decision', 'n/a')}",
         "- Note: Full live provider checks are available with `python3 main.py data-health today`.",
+        "",
+        "## Simulated Portfolio Memory",
+        f"- Open / Planned Trades: {journal_summary.get('open_trades', 0)}",
+        f"- Closed Trades: {journal_summary.get('closed_trades', 0)}",
+        f"- Today Realized P&L: {format_money(journal_summary.get('today_realized_pnl', 0))}",
+        f"- Week Realized P&L: {format_money(journal_summary.get('week_realized_pnl', 0))}",
+        f"- Open Unrealized P&L: {format_money(journal_summary.get('open_unrealized_pnl', 0))}",
+        f"- Open Planned Risk: {format_money(journal_summary.get('open_planned_risk', 0))}",
+        f"- Open Symbols: {', '.join(journal_summary.get('open_symbols') or []) if journal_summary.get('open_symbols') else 'None'}",
         "",
         "## Approved Simulated Trades",
     ]
@@ -578,3 +591,9 @@ def format_number(value):
     if value is None:
         return "n/a"
     return f"{value:.2f}"
+
+
+def format_money(value):
+    if value is None:
+        return "n/a"
+    return f"${value:.2f}"

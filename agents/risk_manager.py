@@ -6,6 +6,7 @@ from agents.technical_analyst import analyze_technical_setup
 from data.economic_calendar import format_calendar_event, get_economic_calendar
 from data.earnings_calendar import get_earnings_calendar
 from data.portfolio import analyze_portfolio_exposure
+from data.trade_journal import load_trade_journal, summarize_trade_journal
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,7 @@ def evaluate_trade_risk(ticker, technical_report=None, policy=None):
         ticker,
         correlated_symbols=policy["ai_semi_correlated_symbols"],
     )
+    journal_summary = summarize_trade_journal(load_trade_journal())
 
     if technical_report.get("error"):
         return build_veto_report(
@@ -104,6 +106,8 @@ def evaluate_trade_risk(ticker, technical_report=None, policy=None):
             f"Correlated AI/semi exposure is {portfolio_exposure['correlated_exposure_pct']:.2f}%; watch concentration."
         )
 
+    evaluate_journal_risk(policy, journal_summary, vetoes, warnings)
+
     conditional_plan = build_conditional_plan(
         entry=entry,
         alternative_entry=alternative_entry,
@@ -150,12 +154,12 @@ def evaluate_trade_risk(ticker, technical_report=None, policy=None):
         "earnings": earnings,
         "economic_calendar": economic_calendar,
         "portfolio_exposure": portfolio_exposure,
+        "journal_summary": journal_summary,
         "vetoes": vetoes,
         "conditional_issues": conditional_issues,
         "conditional_plan": conditional_plan,
         "warnings": warnings,
         "missing_information": [
-            "Daily and weekly realized P&L limits are not connected yet.",
             *calendar_missing_information,
         ],
         "citations": technical_report.get("citations", []),
@@ -189,6 +193,40 @@ def evaluate_economic_event_risk(economic_calendar, warnings, missing_informatio
         warnings.append(
             f"High-importance macro event within {days_until} day(s): "
             f"{format_calendar_event(next_event)}."
+        )
+
+
+def evaluate_journal_risk(policy, summary, vetoes, warnings):
+    account_size = policy["paper_account_size"]
+    daily_loss_limit = account_size * policy.get("max_daily_realized_loss_pct", 0.01)
+    weekly_loss_limit = account_size * policy.get("max_weekly_realized_loss_pct", 0.02)
+    open_risk_limit = account_size * policy.get("max_open_planned_risk_pct", 0.03)
+
+    today_pnl = summary.get("today_realized_pnl", 0)
+    week_pnl = summary.get("week_realized_pnl", 0)
+    open_risk = summary.get("open_planned_risk", 0)
+
+    if today_pnl <= -daily_loss_limit:
+        vetoes.append(
+            f"Daily simulated loss limit reached: {today_pnl:.2f} vs limit -{daily_loss_limit:.2f}."
+        )
+    elif today_pnl < 0:
+        warnings.append(f"Simulated portfolio is down {today_pnl:.2f} today; reduce aggression.")
+
+    if week_pnl <= -weekly_loss_limit:
+        vetoes.append(
+            f"Weekly simulated loss limit reached: {week_pnl:.2f} vs limit -{weekly_loss_limit:.2f}."
+        )
+    elif week_pnl < 0:
+        warnings.append(f"Simulated portfolio is down {week_pnl:.2f} this week; require cleaner setups.")
+
+    if open_risk > open_risk_limit:
+        vetoes.append(
+            f"Open planned risk is {open_risk:.2f}, above portfolio limit {open_risk_limit:.2f}."
+        )
+    elif open_risk > open_risk_limit * 0.75:
+        warnings.append(
+            f"Open planned risk is {open_risk:.2f}; nearing portfolio limit {open_risk_limit:.2f}."
         )
 
 
@@ -321,6 +359,7 @@ def build_veto_report(ticker, policy, technical_report, reasons):
         "position": {},
         "earnings": {},
         "portfolio_exposure": {},
+        "journal_summary": {},
         "vetoes": reasons,
         "conditional_issues": [],
         "conditional_plan": {},
@@ -401,6 +440,12 @@ def format_risk_report(report):
         "## Portfolio Exposure",
         f"- Current Symbol Exposure: {format_number(report.get('portfolio_exposure', {}).get('current_symbol_exposure_pct'))}%",
         f"- Correlated Exposure: {format_number(report.get('portfolio_exposure', {}).get('correlated_exposure_pct'))}%",
+        "",
+        "## Simulated Portfolio Memory",
+        f"- Open / Planned Trades: {report.get('journal_summary', {}).get('open_trades', 0)}",
+        f"- Today Realized P&L: {format_number(report.get('journal_summary', {}).get('today_realized_pnl'))}",
+        f"- Week Realized P&L: {format_number(report.get('journal_summary', {}).get('week_realized_pnl'))}",
+        f"- Open Planned Risk: {format_number(report.get('journal_summary', {}).get('open_planned_risk'))}",
         "",
         "## Vetoes",
     ])

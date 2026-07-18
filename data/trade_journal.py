@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -96,6 +96,36 @@ def append_trade(row):
     return trade["id"]
 
 
+def open_trade_from_plan(
+    symbol,
+    entry,
+    stop,
+    target,
+    shares,
+    side="long",
+    status="planned",
+    setup_type="manual",
+    source="manual",
+    agent_run_id="",
+    thesis="",
+    notes="",
+):
+    return append_trade({
+        "symbol": symbol,
+        "side": side,
+        "status": status,
+        "setup_type": setup_type,
+        "source": source,
+        "agent_run_id": agent_run_id,
+        "entry": entry,
+        "stop": stop,
+        "target": target,
+        "shares": shares,
+        "thesis": thesis,
+        "notes": notes,
+    })
+
+
 def close_trade(trade_id, exit_price, exit_reason="", lessons=""):
     journal = load_trade_journal()
     match = journal["id"].astype(str) == str(trade_id)
@@ -169,28 +199,39 @@ def summarize_trade_journal(frame):
     if frame.empty:
         return {
             "open_trades": 0,
+            "planned_trades": 0,
             "closed_trades": 0,
             "total_realized_pnl": 0,
+            "today_realized_pnl": 0,
+            "week_realized_pnl": 0,
             "open_unrealized_pnl": 0,
             "open_planned_risk": 0,
             "win_rate": 0,
             "avg_r_multiple": 0,
+            "open_symbols": [],
         }
 
     statuses = frame["status"].map(normalize_status)
     open_frame = frame[statuses.isin(OPEN_STATUSES)]
+    planned_frame = frame[statuses == "planned"]
     closed_frame = frame[statuses == CLOSED_STATUS]
+    today_closed = filter_closed_since(closed_frame, date.today())
+    week_closed = filter_closed_since(closed_frame, start_of_week(date.today()))
     closed_with_outcomes = closed_frame[closed_frame["outcome"].isin(["win", "loss", "breakeven"])]
     wins = len(closed_with_outcomes[closed_with_outcomes["outcome"] == "win"])
 
     return {
         "open_trades": len(open_frame),
+        "planned_trades": len(planned_frame),
         "closed_trades": len(closed_frame),
         "total_realized_pnl": numeric_sum(closed_frame, "realized_pnl"),
+        "today_realized_pnl": numeric_sum(today_closed, "realized_pnl"),
+        "week_realized_pnl": numeric_sum(week_closed, "realized_pnl"),
         "open_unrealized_pnl": numeric_sum(open_frame, "unrealized_pnl"),
         "open_planned_risk": numeric_sum(open_frame, "planned_risk"),
         "win_rate": (wins / len(closed_with_outcomes) * 100) if len(closed_with_outcomes) else 0,
         "avg_r_multiple": numeric_mean(closed_frame, "r_multiple"),
+        "open_symbols": sorted(open_frame["symbol"].dropna().astype(str).str.upper().unique().tolist()),
     }
 
 
@@ -199,12 +240,16 @@ def format_trade_journal_summary(summary):
         "# Trade Journal Summary",
         "",
         f"Open trades: {summary['open_trades']}",
+        f"Planned trades: {summary['planned_trades']}",
         f"Closed trades: {summary['closed_trades']}",
         f"Total realized P&L: {summary['total_realized_pnl']:.2f}",
+        f"Today realized P&L: {summary['today_realized_pnl']:.2f}",
+        f"Week realized P&L: {summary['week_realized_pnl']:.2f}",
         f"Open unrealized P&L: {summary['open_unrealized_pnl']:.2f}",
         f"Open planned risk: {summary['open_planned_risk']:.2f}",
         f"Win rate: {summary['win_rate']:.1f}%",
         f"Average R: {summary['avg_r_multiple']:.2f}",
+        f"Open symbols: {', '.join(summary['open_symbols']) if summary['open_symbols'] else 'None'}",
     ])
 
 
@@ -283,6 +328,28 @@ def numeric_sum(frame, column):
 def numeric_mean(frame, column):
     values = pd.to_numeric(frame.get(column), errors="coerce").dropna()
     return float(values.mean()) if not values.empty else 0
+
+
+def filter_closed_since(frame, start_date):
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=TRADE_COLUMNS)
+
+    dates = frame["closed_at"].map(parse_date)
+    return frame[dates.map(lambda value: value is not None and value >= start_date)]
+
+
+def parse_date(value):
+    value = str(value or "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).date()
+    except ValueError:
+        return None
+
+
+def start_of_week(day):
+    return day - timedelta(days=day.weekday())
 
 
 def to_float(value):

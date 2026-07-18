@@ -13,6 +13,8 @@ python3 main.py macro today
 python3 main.py earnings MSFT
 python3 main.py portfolio MSFT
 python3 main.py journal summary
+python3 main.py journal open MSFT 400 380 430 10 --status planned --run-id RUN_ID
+python3 main.py journal close TRADE_ID 425 --reason target
 python3 main.py feedback summary
 python3 main.py security check
 python3 main.py data-health today
@@ -42,8 +44,15 @@ The `dashboard start` command:
 The `journal summary` command:
 
 1. Reads the local simulated trade journal.
-2. Calculates open trades, closed trades, realized P&L, unrealized P&L, open planned risk, win rate, and average R.
-3. Supports the future feedback loop where CIO and Risk can compare recommendations against simulated outcomes.
+2. Calculates open trades, planned trades, closed trades, realized P&L, daily/weekly realized P&L, unrealized P&L, open planned risk, win rate, average R, and open symbols.
+3. Feeds CIO, Risk, the morning brief, and the feedback loop with simulated portfolio memory.
+
+The `journal open` and `journal close` commands:
+
+1. Add planned/open simulated trades from a CIO run or manual review.
+2. Close simulated trades with exit price, exit reason, and lessons learned.
+3. Keep all trade records local in ignored `portfolio/trade_journal.csv`.
+4. Do not place live trades.
 
 The `feedback summary` command:
 
@@ -157,11 +166,12 @@ The `technical` command:
 The `risk` command:
 
 1. Reads the technical setup, earnings calendar, economic calendar, and portfolio exposure for a ticker.
-2. Validates entry, stop, target, reward-to-risk, earnings proximity, macro event risk, and correlated exposure.
-3. Calculates paper position size from the risk policy.
-4. Blocks long simulated trades when Technical stance is bearish or no_trade.
-5. Issues vetoes, warnings, missing information, or approval for paper trade.
-6. Saves the report in `reports/risk/`.
+2. Reads the simulated trade journal for daily/weekly realized P&L and current open planned risk.
+3. Validates entry, stop, target, reward-to-risk, earnings proximity, macro event risk, correlated exposure, loss limits, and open-risk limits.
+4. Calculates paper position size from the risk policy.
+5. Blocks long simulated trades when Technical stance is bearish or no_trade.
+6. Issues vetoes, warnings, missing information, or approval for paper trade.
+7. Saves the report in `reports/risk/`.
 
 The `cio` command:
 
