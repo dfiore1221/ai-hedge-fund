@@ -40,7 +40,20 @@ def analyze_portfolio_exposure(ticker=None, portfolio=None, correlated_symbols=N
     positions = list(portfolio.get("positions", []))
     if include_journal:
         positions.extend(journal_positions())
-    total_value = portfolio.get("cash", 0) + sum(position_value(position) for position in positions)
+    cash = float(portfolio.get("cash", 0))
+    gross_position_value = sum(position_value(position) for position in positions)
+    open_position_value = sum(
+        position_value(position)
+        for position in positions
+        if str(position.get("status", "open")).lower() == "open"
+    )
+    planned_position_value = sum(
+        position_value(position)
+        for position in positions
+        if str(position.get("status", "")).lower() == "planned"
+    )
+    liquid_cash = max(0, cash - open_position_value)
+    total_value = cash + unrealized_pnl_from_positions(positions)
 
     symbol = ticker.upper().strip() if ticker else None
     current_symbol_value = sum(
@@ -56,8 +69,12 @@ def analyze_portfolio_exposure(ticker=None, portfolio=None, correlated_symbols=N
 
     return {
         "account_name": portfolio.get("account_name"),
-        "cash": portfolio.get("cash", 0),
+        "cash": cash,
+        "liquid_cash": liquid_cash,
         "total_value": total_value,
+        "gross_position_value": gross_position_value,
+        "open_position_value": open_position_value,
+        "planned_position_value": planned_position_value,
         "positions_count": len(positions),
         "symbol": symbol,
         "current_symbol_value": current_symbol_value,
@@ -99,8 +116,13 @@ def journal_positions():
             "source": "trade_journal",
             "status": trade.get("status"),
             "trade_id": trade.get("id"),
+            "unrealized_pnl": to_float(trade.get("unrealized_pnl")),
         })
     return positions
+
+
+def unrealized_pnl_from_positions(positions):
+    return sum(float(position.get("unrealized_pnl", 0) or 0) for position in positions)
 
 
 def pct(value, total):
@@ -114,8 +136,11 @@ def format_portfolio_exposure(exposure):
         "# Portfolio Exposure",
         "",
         f"Account: {exposure['account_name']}",
-        f"Cash: {exposure['cash']:.2f}",
-        f"Total Value: {exposure['total_value']:.2f}",
+        f"Starting Cash: {exposure['cash']:.2f}",
+        f"Estimated Liquid Cash: {exposure['liquid_cash']:.2f}",
+        f"Estimated Portfolio Equity: {exposure['total_value']:.2f}",
+        f"Open Position Value: {exposure['open_position_value']:.2f}",
+        f"Planned Position Value: {exposure['planned_position_value']:.2f}",
         f"Positions: {exposure['positions_count']}",
         f"Symbol: {exposure['symbol'] or 'n/a'}",
         f"Symbol Exposure: {exposure['current_symbol_exposure_pct']:.2f}%",

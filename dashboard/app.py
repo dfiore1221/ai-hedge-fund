@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 from agents.feedback_loop import generate_feedback_report
 from data.data_quality import generate_data_health_report
+from data.portfolio import analyze_portfolio_exposure
 from data.trade_journal import (
     OPEN_STATUSES,
     TRADE_JOURNAL_PATH,
@@ -297,10 +298,20 @@ def render_trade_journal():
     if refresh_prices:
         save_trade_journal(journal)
     summary = summarize_trade_journal(journal)
+    account = analyze_portfolio_exposure()
     statuses = journal["status"].str.lower() if not journal.empty else pd.Series(dtype=str)
     open_trades = journal[statuses.isin(OPEN_STATUSES)] if not journal.empty else journal
     closed_trades = journal[statuses == "closed"] if not journal.empty else journal
 
+    st.markdown("#### Paper Account")
+    a1, a2, a3, a4, a5 = st.columns(5)
+    a1.metric("Starting Capital", money(account["cash"]))
+    a2.metric("Est. Liquid Cash", money(account["liquid_cash"]))
+    a3.metric("Est. Equity", money(account["total_value"]))
+    a4.metric("Open Value", money(account["open_position_value"]))
+    a5.metric("Planned Value", money(account["planned_position_value"]))
+
+    st.markdown("#### Trade Journal")
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Open / Planned", summary["open_trades"])
     c2.metric("Closed", summary["closed_trades"])
