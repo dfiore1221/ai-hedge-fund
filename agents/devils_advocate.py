@@ -82,6 +82,8 @@ def identify_bias_flags(agent_outputs, conflicts):
         flags.append("Confirmation bias risk: constructive thesis may tempt override of risk veto.")
     if options.get("stance") == "bullish_positioning" and options.get("confidence", 0) < 0.5:
         flags.append("FOMO risk: bullish options clue is low confidence.")
+    if options.get("stance") in {"bearish_or_hedging_positioning", "protective_or_bearish_lean"} and options.get("confidence", 0) < 0.5:
+        flags.append("Options fear signal risk: protective put activity can reflect hedging, not necessarily directional conviction.")
     if news.get("stance") == "positive_catalyst" and risk.get("decision") != "approved_for_paper_trade":
         flags.append("Headline-chasing risk: positive news should not override entry quality or risk controls.")
     if conflicts:

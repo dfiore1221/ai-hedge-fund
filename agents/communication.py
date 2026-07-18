@@ -46,6 +46,9 @@ def generate_conflict_memo(symbol, agent_outputs):
     if options.get("stance") == "bullish_positioning" and technical.get("stance") in {"no_trade", "bearish"}:
         conflicts.append("Bullish options positioning conflicts with weak technical setup.")
 
+    if options.get("stance") in {"bearish_or_hedging_positioning", "protective_or_bearish_lean"} and technical.get("stance") == "bullish":
+        conflicts.append("Bullish technical stance conflicts with protective or bearish options positioning.")
+
     if news.get("stance") == "negative_catalyst" and technical.get("stance") == "bullish":
         conflicts.append("Bullish technical stance conflicts with negative overnight news catalyst.")
 

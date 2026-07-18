@@ -221,9 +221,9 @@ def score_candidate(summary):
     elif sample_size:
         score -= 4
 
-    if options_stance == "bullish_positioning":
+    if options_stance in {"bullish_positioning", "bullish_lean"}:
         score += 5
-    elif options_stance == "bearish_positioning":
+    elif options_stance in {"bearish_positioning", "bearish_or_hedging_positioning", "protective_or_bearish_lean"}:
         score -= 5
 
     if news_stance == "positive_catalyst":

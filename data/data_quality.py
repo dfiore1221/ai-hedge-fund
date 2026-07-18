@@ -452,10 +452,10 @@ def score_domains(
             "detail": build_news_context_detail(news_check, premium_news_provider_configured),
         },
         "options": {
-            "score": 10 if options_provider_configured else 4,
+            "score": 10 if options_provider_configured else 6,
             "max_score": 10,
-            "status": "strong" if options_provider_configured else "starter",
-            "detail": "Options provider configured." if options_provider_configured else "Only starter Yahoo options checks are available.",
+            "status": "strong" if options_provider_configured else "enhanced_starter",
+            "detail": "Options provider configured." if options_provider_configured else "Enhanced Yahoo/yfinance options-chain snapshot is available; no paid OPRA/greeks/flow provider connected.",
         },
         "macro_event_context": {
             "score": 10 if macro_provider_configured else 4,

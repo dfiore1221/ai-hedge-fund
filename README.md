@@ -244,6 +244,6 @@ See `docs/data_quality_systems_research.md` for the current data-provider resear
 - [x] Add economic calendar integration. Uses `TRADING_ECONOMICS_API_KEY` when available, otherwise uses the free FRED release calendar through `FRED_API_KEY`.
 - [x] Add starter news / analyst feed. Uses Finnhub company news and recommendation trends when `FINNHUB_API_KEY` is configured, with Yahoo starter headlines and analyst actions as fallback.
 - [x] Add better market data provider. Uses Tiingo latest equity prices when `TIINGO_API_KEY` is configured, or Alpaca latest stock bars when Alpaca keys are configured, with Yahoo as fallback.
-- [ ] Add options data provider.
+- [ ] Add options data provider. Interim enhanced starter layer uses Yahoo/yfinance chains for watch-only put/call, IV, liquidity, and unusual-activity clues.
 - [x] Add local data cache. Stores successful provider JSON responses under ignored `data_cache/` with short TTLs and stale fallback where appropriate.
 - [ ] Add provider comparison checks.
