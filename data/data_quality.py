@@ -5,8 +5,13 @@ import io
 from datetime import date, datetime
 from pathlib import Path
 
+from data.alpaca_data import fetch_latest_stock_bars
 from data.economic_calendar import get_economic_calendar
-from data.finnhub_data import fetch_company_news, fetch_recommendation_trends, is_finnhub_configured
+from data.finnhub_data import (
+    fetch_company_news,
+    fetch_recommendation_trends,
+    is_finnhub_configured,
+)
 from data.fred_data import get_fred_macro_snapshot
 
 
@@ -42,6 +47,7 @@ PROVIDER_CONFIGS = [
         "name": "Alpaca",
         "domain": "equity/options/crypto market data and future paper-trading bridge",
         "env_key": "ALPACA_API_KEY",
+        "required_env_keys": ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"],
         "status_when_missing": "not_configured",
         "note": "Candidate primary market-data provider if paper trading matters.",
     },
@@ -106,10 +112,12 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
     economic_calendar = get_economic_calendar()
     news_check = check_news_provider(symbols[0]) if symbols else {"status": "skipped"}
     live_price_checks = []
+    alpaca_price_check = {"status": "skipped", "bars": {}, "comparisons": []}
 
     if live_checks:
         for symbol in symbols[:live_check_limit]:
             live_price_checks.append(check_price_history(symbol))
+        alpaca_price_check = check_alpaca_price_provider(symbols[:live_check_limit])
 
     domain_scores = score_domains(
         providers,
@@ -118,6 +126,7 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
         fred_snapshot,
         economic_calendar,
         news_check,
+        alpaca_price_check,
     )
     quality_score = sum(item["score"] for item in domain_scores.values())
     gate = classify_gate(quality_score, domain_scores, live_price_checks, live_checks)
@@ -130,6 +139,7 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
         "live_check_limit": live_check_limit if live_checks else 0,
         "symbols_checked": [item["symbol"] for item in live_price_checks],
         "live_price_checks": live_price_checks,
+        "alpaca_price_check": alpaca_price_check,
         "providers": providers,
         "official_macro": fred_snapshot,
         "economic_calendar": economic_calendar,
@@ -172,7 +182,13 @@ def build_provider_statuses():
 
     for config in PROVIDER_CONFIGS:
         env_key = config["env_key"]
-        configured = True if env_key is None else bool(os.getenv(env_key, "").strip())
+        required_env_keys = config.get("required_env_keys")
+        if env_key is None:
+            configured = True
+        elif required_env_keys:
+            configured = all(bool(os.getenv(key, "").strip()) for key in required_env_keys)
+        else:
+            configured = bool(os.getenv(env_key, "").strip())
 
         if configured:
             status = "available" if env_key is None else "configured"
@@ -182,7 +198,7 @@ def build_provider_statuses():
         statuses.append({
             "name": config["name"],
             "domain": config["domain"],
-            "env_key": env_key,
+            "env_key": "+".join(required_env_keys) if required_env_keys else env_key,
             "configured": configured,
             "status": status,
             "note": config["note"],
@@ -290,6 +306,66 @@ def check_news_provider(symbol):
     return check_yahoo_news(symbol)
 
 
+def check_alpaca_price_provider(symbols):
+    response = fetch_latest_stock_bars(symbols)
+    if response.get("status") != "ok":
+        return {
+            **response,
+            "comparisons": [],
+            "agreement_status": response.get("status"),
+        }
+
+    comparisons = []
+    for symbol, alpaca_bar in response.get("bars", {}).items():
+        yahoo_check = check_price_history(symbol)
+        comparison = compare_price_sources(symbol, yahoo_check, alpaca_bar)
+        comparisons.append(comparison)
+
+    agreement_statuses = {item["status"] for item in comparisons}
+    if "conflict" in agreement_statuses:
+        agreement_status = "conflict"
+    elif "missing" in agreement_statuses or "error" in agreement_statuses:
+        agreement_status = "partial"
+    else:
+        agreement_status = "ok"
+
+    return {
+        **response,
+        "comparisons": comparisons,
+        "agreement_status": agreement_status,
+    }
+
+
+def compare_price_sources(symbol, yahoo_check, alpaca_bar):
+    if yahoo_check.get("status") not in {"ok", "stale"}:
+        return {
+            "symbol": symbol,
+            "status": "missing",
+            "message": f"Yahoo comparison unavailable: {yahoo_check.get('message', yahoo_check.get('status'))}",
+        }
+
+    yahoo_close = yahoo_check.get("latest_close")
+    alpaca_close = alpaca_bar.get("close")
+    if yahoo_close in {None, 0} or alpaca_close in {None, 0}:
+        return {
+            "symbol": symbol,
+            "status": "missing",
+            "message": "One provider returned no usable close price.",
+        }
+
+    diff_pct = abs(alpaca_close - yahoo_close) / yahoo_close * 100
+    status = "ok" if diff_pct <= 5 else "conflict"
+    return {
+        "symbol": symbol,
+        "status": status,
+        "yahoo_close": yahoo_close,
+        "alpaca_close": alpaca_close,
+        "diff_pct": round(diff_pct, 2),
+        "alpaca_timestamp": alpaca_bar.get("timestamp"),
+        "message": "Provider prices are within tolerance." if status == "ok" else "Provider prices differ by more than 5%.",
+    }
+
+
 def score_domains(
     providers,
     live_price_checks,
@@ -297,6 +373,7 @@ def score_domains(
     fred_snapshot=None,
     economic_calendar=None,
     news_check=None,
+    alpaca_price_check=None,
 ):
     provider_names = {provider["name"]: provider for provider in providers}
     configured_names = {
@@ -305,6 +382,12 @@ def score_domains(
         if provider["configured"]
     }
     market_provider_configured = bool({"Alpaca", "Polygon", "Databento"} & configured_names)
+    market_provider_working = bool(
+        alpaca_price_check and alpaca_price_check.get("status") == "ok"
+    )
+    provider_agreement_ok = bool(
+        market_provider_working and alpaca_price_check.get("agreement_status") == "ok"
+    )
     premium_news_provider_configured = bool({"Benzinga", "Finnhub"} & configured_names)
     starter_news_available = bool(news_check and news_check.get("status") == "ok")
     news_provider_configured = premium_news_provider_configured or starter_news_available
@@ -315,7 +398,7 @@ def score_domains(
         economic_calendar_ok
         or bool({"Finnhub", "Benzinga"} & configured_names)
     )
-    options_provider_configured = bool({"Tradier", "ORATS", "Polygon", "Alpaca", "Databento"} & configured_names)
+    options_provider_configured = bool({"Tradier", "ORATS"} & configured_names)
     fred_ok = bool(fred_snapshot and fred_snapshot.get("status") in {"ok", "partial"})
     macro_provider_configured = fred_ok or economic_calendar_ok
     sec_configured = provider_names["SEC EDGAR"]["configured"]
@@ -328,16 +411,16 @@ def score_domains(
 
     return {
         "price_bars": {
-            "score": min(25, price_score + (3 if market_provider_configured else 0)),
+            "score": min(25, price_score + (3 if market_provider_working else 0)),
             "max_score": 25,
-            "status": "strong" if market_provider_configured else "prototype",
-            "detail": "Paid market-data provider configured." if market_provider_configured else "Using yfinance prototype market data.",
+            "status": "strong" if market_provider_working else "configured_unverified" if market_provider_configured else "prototype",
+            "detail": build_price_bars_detail(alpaca_price_check, market_provider_configured, market_provider_working),
         },
         "corporate_actions_reference": {
-            "score": 10 if market_provider_configured and sec_configured else 6 if sec_configured else 3,
+            "score": 10 if market_provider_working and sec_configured else 6 if sec_configured else 3,
             "max_score": 10,
-            "status": "partial" if not market_provider_configured else "strong",
-            "detail": "SEC configured; paid reference/corporate-action data not configured." if sec_configured and not market_provider_configured else "Reference-data coverage needs configuration.",
+            "status": "partial" if not market_provider_working else "strong",
+            "detail": "SEC configured; second market-data provider not live yet." if sec_configured and not market_provider_working else "Reference-data coverage needs configuration.",
         },
         "earnings_events": {
             "score": 15 if event_provider_configured else 5,
@@ -364,10 +447,10 @@ def score_domains(
             "detail": build_macro_context_detail(fred_snapshot, economic_calendar, macro_provider_configured),
         },
         "provider_agreement_checks": {
-            "score": 10 if market_provider_configured and live_checks else 4 if live_checks else 2,
+            "score": 10 if provider_agreement_ok and live_checks else 7 if market_provider_working and live_checks else 4 if live_checks else 2,
             "max_score": 10,
-            "status": "missing_provider" if not market_provider_configured else "partial",
-            "detail": "Provider comparison can begin once a second market-data provider is configured.",
+            "status": build_provider_agreement_status(alpaca_price_check, market_provider_configured, market_provider_working),
+            "detail": build_provider_agreement_detail(alpaca_price_check, market_provider_configured, market_provider_working),
         },
         "critical_errors": {
             "score": 5 if not has_critical_live_errors(live_price_checks, live_checks) else 0,
@@ -376,6 +459,45 @@ def score_domains(
             "detail": "No critical live-check errors." if not has_critical_live_errors(live_price_checks, live_checks) else "Live price checks have critical missing/error results.",
         },
     }
+
+
+def build_price_bars_detail(alpaca_price_check, market_provider_configured, market_provider_working):
+    if market_provider_working:
+        return (
+            "Alpaca market-data check available "
+            f"({alpaca_price_check.get('bar_count', 0)} latest bars, "
+            f"feed {alpaca_price_check.get('feed', 'n/a')}); Yahoo remains fallback."
+        )
+    if market_provider_configured:
+        return f"Alpaca configured but live check is not working: {alpaca_price_check.get('error', alpaca_price_check.get('status', 'n/a'))}."
+    return "Using yfinance prototype market data."
+
+
+def build_provider_agreement_status(alpaca_price_check, market_provider_configured, market_provider_working):
+    if not market_provider_configured:
+        return "missing_provider"
+    if not market_provider_working:
+        return "configured_unverified"
+    if alpaca_price_check.get("agreement_status") == "ok":
+        return "partial"
+    if alpaca_price_check.get("agreement_status") == "conflict":
+        return "provider_conflict"
+    return "partial"
+
+
+def build_provider_agreement_detail(alpaca_price_check, market_provider_configured, market_provider_working):
+    if not market_provider_configured:
+        return "Provider comparison can begin once Alpaca, Polygon, or another second market-data provider is configured."
+    if not market_provider_working:
+        return f"Second provider configured but not verified: {alpaca_price_check.get('error', alpaca_price_check.get('status', 'n/a'))}."
+
+    comparisons = alpaca_price_check.get("comparisons") or []
+    ok_count = len([item for item in comparisons if item.get("status") == "ok"])
+    conflict_count = len([item for item in comparisons if item.get("status") == "conflict"])
+    return (
+        f"Compared Alpaca vs Yahoo on {len(comparisons)} symbols: "
+        f"{ok_count} within tolerance, {conflict_count} conflicts."
+    )
 
 
 def build_coverage(live_price_checks, watchlist_count, live_checks):
@@ -633,6 +755,10 @@ def format_data_health_report(report):
         for item in report.get("live_price_checks", []):
             lines.append(format_live_price_check(item))
 
+    lines.extend(["", "## Provider Agreement Check"])
+    alpaca_check = report.get("alpaca_price_check") or {}
+    lines.extend(format_alpaca_provider_check(alpaca_check))
+
     lines.extend(["", "## Blockers"])
     lines.extend([f"- {item}" for item in report["blockers"]] or ["- None."])
 
@@ -651,6 +777,33 @@ def format_live_price_check(item):
     if item["status"] == "stale":
         return f"- {item['symbol']}: stale, latest {item.get('latest_date')}"
     return f"- {item['symbol']}: {item['status']} - {item.get('message', 'n/a')}"
+
+
+def format_alpaca_provider_check(alpaca_check):
+    if alpaca_check.get("status") == "not_configured":
+        return ["- Alpaca: not configured."]
+    if alpaca_check.get("status") == "skipped":
+        return ["- Alpaca: skipped."]
+    if alpaca_check.get("status") != "ok":
+        return [f"- Alpaca: {alpaca_check.get('status')} - {alpaca_check.get('error', 'n/a')}"]
+
+    lines = [
+        (
+            f"- Alpaca: ok, feed {alpaca_check.get('feed', 'n/a')}, "
+            f"{alpaca_check.get('bar_count', 0)} latest bars."
+        )
+    ]
+    comparisons = alpaca_check.get("comparisons") or []
+    for item in comparisons[:8]:
+        if item.get("status") in {"ok", "conflict"}:
+            lines.append(
+                f"- {item['symbol']}: {item['status']}, Alpaca {item.get('alpaca_close'):.2f} "
+                f"vs Yahoo {item.get('yahoo_close'):.2f}, diff {item.get('diff_pct')}%."
+            )
+        else:
+            lines.append(f"- {item.get('symbol', 'n/a')}: {item.get('status')} - {item.get('message', 'n/a')}")
+
+    return lines
 
 
 def safe_ratio(numerator, denominator):
