@@ -4,6 +4,12 @@ from pathlib import Path
 
 import yfinance as yf
 
+from data.finnhub_data import (
+    fetch_company_news,
+    fetch_recommendation_trends,
+    is_finnhub_configured,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports" / "news"
@@ -106,6 +112,8 @@ SYMBOL_ALIASES = {
 
 def collect_overnight_news(ticker, limit=10):
     ticker = ticker.upper().strip()
+    finnhub_configured = is_finnhub_configured()
+    provider_status = []
 
     try:
         yf_ticker = yf.Ticker(ticker)
@@ -119,16 +127,50 @@ def collect_overnight_news(ticker, limit=10):
             "items": [],
             "analyst_actions": [],
             "summary": {},
+            "providers": [{"name": "Yahoo Finance", "status": "error", "detail": str(exc)}],
             "missing_information": [
-                "Premium market-moving news and analyst action feeds are not connected yet.",
+                "Starter Yahoo news feed failed.",
             ],
         }
 
     items = []
+    finnhub_news = {"status": "not_configured", "items": []}
+    if finnhub_configured:
+        finnhub_news = fetch_company_news(ticker, limit=limit)
+        provider_status.append({
+            "name": "Finnhub",
+            "status": finnhub_news.get("status"),
+            "detail": build_provider_detail(finnhub_news, "company news"),
+        })
+        for item in finnhub_news.get("items", []):
+            items.append(normalize_finnhub_news_item(item, aliases))
+    else:
+        provider_status.append({
+            "name": "Finnhub",
+            "status": "not_configured",
+            "detail": "FINNHUB_API_KEY is not configured.",
+        })
+
+    provider_status.append({
+        "name": "Yahoo Finance",
+        "status": "ok" if news_items else "empty",
+        "detail": f"{len(news_items)} starter headlines returned.",
+    })
     for item in news_items[:limit]:
         items.append(normalize_news_item(item, aliases))
 
+    items = dedupe_news_items(items)[:limit]
     analyst_actions = collect_analyst_actions(yf_ticker)
+    finnhub_recommendations = {"status": "not_configured", "items": []}
+    if finnhub_configured:
+        finnhub_recommendations = fetch_recommendation_trends(ticker)
+        provider_status.append({
+            "name": "Finnhub Recommendations",
+            "status": finnhub_recommendations.get("status"),
+            "detail": build_provider_detail(finnhub_recommendations, "recommendation trends"),
+        })
+        analyst_actions.extend(normalize_finnhub_recommendations(finnhub_recommendations.get("items", [])))
+
     summary = summarize_news(items, analyst_actions)
 
     return {
@@ -140,10 +182,12 @@ def collect_overnight_news(ticker, limit=10):
         "summary": summary,
         "stance": summary["stance"],
         "confidence": summary["confidence"],
-        "missing_information": [
-            "Premium market-moving news and analyst action feeds are not connected yet.",
-            "Yahoo starter feed can miss pre-market wires, paywalled analyst notes, and intraday updates.",
-        ],
+        "providers": provider_status,
+        "missing_information": build_missing_information(
+            finnhub_configured,
+            finnhub_news,
+            finnhub_recommendations,
+        ),
     }
 
 
@@ -173,6 +217,33 @@ def normalize_news_item(item, aliases):
         "catalyst_tags": tags,
         "symbol_relevant": symbol_relevant,
         "relevance_score": score_relevance(tags, age_hours, sentiment, symbol_relevant),
+        "provider": "Yahoo Finance",
+    }
+
+
+def normalize_finnhub_news_item(item, aliases):
+    title = item.get("headline")
+    summary = item.get("summary")
+    text = " ".join([value for value in [title, summary] if value])
+    published = parse_published_at(item.get("datetime"))
+    age_hours = hours_since(published)
+    symbol_relevant = is_symbol_relevant(text, aliases)
+    sentiment = score_text_sentiment(text)
+    tags = tag_catalysts(text)
+
+    return {
+        "title": title,
+        "publisher": item.get("source") or "Finnhub",
+        "url": item.get("url"),
+        "published": published.isoformat() if published else None,
+        "age_hours": age_hours,
+        "is_fresh": age_hours is not None and age_hours <= FRESH_NEWS_HOURS,
+        "sentiment_score": sentiment,
+        "sentiment_label": sentiment_label(sentiment),
+        "catalyst_tags": tags,
+        "symbol_relevant": symbol_relevant,
+        "relevance_score": score_relevance(tags, age_hours, sentiment, symbol_relevant),
+        "provider": "Finnhub",
     }
 
 
@@ -204,6 +275,51 @@ def collect_analyst_actions(yf_ticker, limit=8):
         })
 
     return records
+
+
+def normalize_finnhub_recommendations(items):
+    records = []
+    for item in items:
+        period = item.get("period")
+        score = score_recommendation_trend(item)
+        action = "positive consensus" if score > 0 else "negative consensus" if score < 0 else "neutral consensus"
+        records.append({
+            "date": period,
+            "firm": "Finnhub consensus",
+            "action": action,
+            "from_grade": None,
+            "to_grade": format_recommendation_mix(item),
+            "sentiment_score": score,
+            "provider": "Finnhub",
+        })
+    return records
+
+
+def score_recommendation_trend(item):
+    positive = int(item.get("strongBuy") or 0) * 2 + int(item.get("buy") or 0)
+    negative = int(item.get("strongSell") or 0) * 2 + int(item.get("sell") or 0)
+    hold = int(item.get("hold") or 0)
+    total = positive + negative + hold
+    if total == 0:
+        return 0
+
+    net = (positive - negative) / total
+    if net >= 0.35:
+        return 1
+    if net <= -0.25:
+        return -1
+    return 0
+
+
+def format_recommendation_mix(item):
+    parts = [
+        f"strong buy {item.get('strongBuy', 0)}",
+        f"buy {item.get('buy', 0)}",
+        f"hold {item.get('hold', 0)}",
+        f"sell {item.get('sell', 0)}",
+        f"strong sell {item.get('strongSell', 0)}",
+    ]
+    return ", ".join(parts)
 
 
 def summarize_news(items, analyst_actions):
@@ -405,6 +521,56 @@ def safe_row_get(row, key):
     return value
 
 
+def dedupe_news_items(items):
+    seen = set()
+    deduped = []
+
+    for item in items:
+        title_key = normalize_dedupe_key(item.get("title"))
+        url_key = normalize_dedupe_key(item.get("url"))
+        keys = {key for key in [title_key, url_key] if key}
+        if not keys or keys & seen:
+            continue
+        seen.update(keys)
+        deduped.append(item)
+
+    return sorted(
+        deduped,
+        key=lambda item: item.get("age_hours") if item.get("age_hours") is not None else 9999,
+    )
+
+
+def normalize_dedupe_key(value):
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", str(value).strip().lower())
+
+
+def build_provider_detail(response, label):
+    if response.get("status") == "ok":
+        return f"{response.get('item_count', len(response.get('items', [])))} {label} returned."
+    if response.get("status") == "empty":
+        return f"No {label} returned."
+    return response.get("error") or response.get("status") or "No detail."
+
+
+def build_missing_information(finnhub_configured, finnhub_news, finnhub_recommendations):
+    missing = []
+
+    if not finnhub_configured:
+        missing.append("Finnhub is not connected; using Yahoo starter headlines and analyst actions only.")
+    elif finnhub_news.get("status") not in {"ok", "empty"}:
+        missing.append("Finnhub company news feed failed or was rate-limited.")
+    elif finnhub_news.get("status") == "empty":
+        missing.append("Finnhub company news returned no recent headlines for this symbol.")
+
+    if finnhub_configured and finnhub_recommendations.get("status") not in {"ok", "empty"}:
+        missing.append("Finnhub recommendation trend feed failed or was rate-limited.")
+
+    missing.append("Premium real-time market-moving news and full analyst-note text are not connected yet.")
+    return missing
+
+
 def format_news_report(report):
     lines = [
         "# Overnight News Report",
@@ -420,6 +586,7 @@ def format_news_report(report):
         f"Timestamp: {report['timestamp']}",
         f"Stance: {report.get('stance', 'n/a')}",
         f"Confidence: {report.get('confidence', 'n/a')}",
+        f"Providers: {format_providers(report.get('providers', []))}",
         "",
         "## Catalyst Summary",
     ])
@@ -443,6 +610,7 @@ def format_news_report(report):
         for item in report["items"]:
             lines.append(
                 f"- {item.get('title')} ({item.get('publisher')}, {item.get('published')}; "
+                f"provider: {item.get('provider') or 'n/a'}, "
                 f"{item.get('sentiment_label')}, "
                 f"{'symbol-relevant' if item.get('symbol_relevant') else 'broad'}, "
                 f"tags: {', '.join(item.get('catalyst_tags', [])) or 'none'})"
@@ -470,6 +638,15 @@ def format_news_report(report):
     lines.extend([f"- {item}" for item in report["missing_information"]])
 
     return "\n".join(lines) + "\n"
+
+
+def format_providers(providers):
+    if not providers:
+        return "n/a"
+    return "; ".join(
+        f"{provider.get('name')}: {provider.get('status')}"
+        for provider in providers
+    )
 
 
 def save_news_report(report):

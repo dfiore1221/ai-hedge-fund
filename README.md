@@ -64,7 +64,7 @@ The `data-health today` command:
 
 1. Checks configured data providers without printing secret values.
 2. Runs a live sample of watchlist price-history checks through the current market-data path.
-3. Verifies FRED macro data, the FRED/Trading Economics economic calendar path, and starter news availability when configured or available.
+3. Verifies FRED macro data, the FRED/Trading Economics economic calendar path, and Finnhub/Yahoo news availability when configured or available.
 4. Scores the morning data packet across price/bars, reference data, earnings/events, news/analyst, options, macro/event context, provider agreement checks, and critical errors.
 5. Produces a data-quality gate: Pass, Conditional, Watch Only, Needs Data, or Blocked.
 6. Explains whether caution is caused by weak setup quality or missing/stale/conflicting data.
@@ -241,7 +241,7 @@ See `docs/data_quality_systems_research.md` for the current data-provider resear
 
 - [x] Add FRED official macro data integration. Requires `FRED_API_KEY` in `.env` to activate live official macro series.
 - [x] Add economic calendar integration. Uses `TRADING_ECONOMICS_API_KEY` when available, otherwise uses the free FRED release calendar through `FRED_API_KEY`.
-- [x] Add starter news / analyst feed. Uses Yahoo starter headlines and analyst actions; premium Benzinga/Finnhub remains a future upgrade.
+- [x] Add starter news / analyst feed. Uses Finnhub company news and recommendation trends when `FINNHUB_API_KEY` is configured, with Yahoo starter headlines and analyst actions as fallback.
 - [ ] Add better market data provider.
 - [ ] Add options data provider.
 - [ ] Add local data cache.

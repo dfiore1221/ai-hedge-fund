@@ -6,6 +6,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from data.economic_calendar import get_economic_calendar
+from data.finnhub_data import fetch_company_news, fetch_recommendation_trends, is_finnhub_configured
 from data.fred_data import get_fred_macro_snapshot
 
 
@@ -103,7 +104,7 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
     providers = build_provider_statuses()
     fred_snapshot = get_fred_macro_snapshot()
     economic_calendar = get_economic_calendar()
-    news_check = check_yahoo_news(symbols[0]) if symbols else {"status": "skipped"}
+    news_check = check_news_provider(symbols[0]) if symbols else {"status": "skipped"}
     live_price_checks = []
 
     if live_checks:
@@ -261,10 +262,32 @@ def check_yahoo_news(symbol):
 
     return {
         "symbol": symbol,
+        "provider": "Yahoo Finance",
         "status": "ok" if news_items else "missing",
         "headline_count": len(news_items),
         "message": "Starter Yahoo news feed returned headlines." if news_items else "No starter headlines returned.",
     }
+
+
+def check_news_provider(symbol):
+    if is_finnhub_configured():
+        news = fetch_company_news(symbol, days_back=3, limit=10)
+        recommendations = fetch_recommendation_trends(symbol, limit=2)
+        news_ok = news.get("status") in {"ok", "empty"}
+        recommendations_ok = recommendations.get("status") in {"ok", "empty"}
+
+        return {
+            "symbol": symbol,
+            "provider": "Finnhub",
+            "status": "ok" if news_ok and recommendations_ok else "error",
+            "headline_count": len(news.get("items", [])),
+            "recommendation_count": len(recommendations.get("items", [])),
+            "message": build_finnhub_news_check_message(news, recommendations),
+            "news_status": news.get("status"),
+            "recommendation_status": recommendations.get("status"),
+        }
+
+    return check_yahoo_news(symbol)
 
 
 def score_domains(
@@ -396,6 +419,14 @@ def build_event_context_detail(economic_calendar, event_provider_configured):
 
 
 def build_news_context_detail(news_check, premium_news_provider_configured):
+    if premium_news_provider_configured and news_check and news_check.get("provider") == "Finnhub":
+        if news_check.get("status") == "ok":
+            return (
+                "Finnhub company-news and recommendation-trend checks available "
+                f"({news_check.get('headline_count', 0)} headlines, "
+                f"{news_check.get('recommendation_count', 0)} recommendation snapshots)."
+            )
+        return news_check.get("message") or "Finnhub configured but live check failed."
     if premium_news_provider_configured:
         return "Premium news/analyst provider configured."
     if news_check and news_check.get("status") == "ok":
@@ -406,6 +437,24 @@ def build_news_context_detail(news_check, premium_news_provider_configured):
     if news_check and news_check.get("message"):
         return news_check["message"]
     return "Only starter Yahoo headlines are available."
+
+
+def build_finnhub_news_check_message(news, recommendations):
+    details = []
+    if news.get("status") in {"ok", "empty"}:
+        details.append(f"company news {news.get('status')} ({len(news.get('items', []))} returned)")
+    else:
+        details.append(f"company news error: {news.get('error', 'n/a')}")
+
+    if recommendations.get("status") in {"ok", "empty"}:
+        details.append(
+            f"recommendation trends {recommendations.get('status')} "
+            f"({len(recommendations.get('items', []))} returned)"
+        )
+    else:
+        details.append(f"recommendation trends error: {recommendations.get('error', 'n/a')}")
+
+    return "Finnhub " + "; ".join(details) + "."
 
 
 def build_macro_context_detail(fred_snapshot, economic_calendar, macro_provider_configured):
@@ -559,9 +608,16 @@ def format_data_health_report(report):
             f"- High-Importance Events: {summary.get('high_importance_count', 0)}",
         ])
 
-    lines.extend(["", "## Starter News Check"])
+    lines.extend(["", "## News Provider Check"])
     news_check = report.get("starter_news_check") or {}
-    if news_check.get("status") == "ok":
+    if news_check.get("provider") == "Finnhub":
+        lines.append(
+            f"- {news_check.get('symbol')}: {news_check.get('status')} via Finnhub, "
+            f"{news_check.get('headline_count', 0)} headlines, "
+            f"{news_check.get('recommendation_count', 0)} recommendation snapshots."
+        )
+        lines.append(f"- Detail: {news_check.get('message', 'n/a')}")
+    elif news_check.get("status") == "ok":
         lines.append(
             f"- {news_check.get('symbol')}: ok, {news_check.get('headline_count', 0)} starter headlines returned."
         )
