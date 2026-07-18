@@ -13,6 +13,7 @@ from data.finnhub_data import (
     is_finnhub_configured,
 )
 from data.fred_data import get_fred_macro_snapshot
+from data.local_cache import cache_summary
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -144,6 +145,7 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
         "official_macro": fred_snapshot,
         "economic_calendar": economic_calendar,
         "starter_news_check": news_check,
+        "cache": cache_summary(),
         "domain_scores": domain_scores,
         "data_quality_score": quality_score,
         "gate": gate,
@@ -714,6 +716,16 @@ def format_data_health_report(report):
             f"- {provider['name']}: {provider['status']} [{env_label}] - {provider['domain']}"
         )
 
+    cache = report.get("cache") or {}
+    lines.extend([
+        "",
+        "## Local Data Cache",
+        f"- Path: {cache.get('path', 'n/a')}",
+        f"- Files: {cache.get('file_count', 0)}",
+        f"- Size: {format_bytes(cache.get('size_bytes', 0))}",
+        f"- Latest Update: {cache.get('latest_updated_at') or 'n/a'}",
+    ])
+
     lines.extend(["", "## Economic Calendar"])
     economic_calendar = report.get("economic_calendar") or {}
     provider = economic_calendar.get("provider") or "Economic Calendar"
@@ -825,6 +837,19 @@ def format_pct(value):
     if value is None:
         return "n/a"
     return f"{value:.1f}%"
+
+
+def format_bytes(value):
+    try:
+        size = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+
+    for unit in ["B", "KB", "MB", "GB"]:
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
 
 
 def load_environment():

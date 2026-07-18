@@ -6,11 +6,15 @@ from urllib.parse import quote
 import requests
 from dotenv import load_dotenv
 
+from data.local_cache import get_cached_json, get_stale_cached_json, set_cached_json, ttl_seconds
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = PROJECT_ROOT / ".env"
 TRADING_ECONOMICS_CALENDAR_URL = "https://api.tradingeconomics.com/calendar/country"
 FRED_RELEASE_DATES_URL = "https://api.stlouisfed.org/fred/releases/dates"
+ECONOMIC_CALENDAR_TTL_SECONDS = ttl_seconds(hours=2)
+ECONOMIC_CALENDAR_STALE_SECONDS = ttl_seconds(days=2)
 DEFAULT_COUNTRIES = ["united states"]
 MARKET_MOVING_KEYWORDS = [
     "adp employment",
@@ -148,9 +152,16 @@ def fetch_calendar_events(api_key, countries, start_date, end_date):
         f"{TRADING_ECONOMICS_CALENDAR_URL}/{country_path}/"
         f"{start_date.isoformat()}/{end_date.isoformat()}"
     )
+    cache_key = f"trading-economics:{country_path}:{start_date.isoformat()}:{end_date.isoformat()}"
+    cached = get_cached_json("economic_calendar", cache_key, ECONOMIC_CALENDAR_TTL_SECONDS)
+    if cached:
+        return cached
+
     response = requests.get(url, params={"c": api_key, "f": "json"}, timeout=20)
     response.raise_for_status()
-    return response.json()
+    payload = response.json()
+    set_cached_json("economic_calendar", cache_key, payload)
+    return payload
 
 
 def get_fred_release_calendar(api_key, start_date, end_date):
@@ -208,9 +219,27 @@ def fetch_fred_release_dates(api_key, start_date, end_date):
         "limit": 1000,
         "include_release_dates_with_no_data": "true",
     }
-    response = requests.get(FRED_RELEASE_DATES_URL, params=params, timeout=20)
-    response.raise_for_status()
-    return response.json()
+    cache_key = f"fred-release-dates:{start_date.isoformat()}:{end_date.isoformat()}"
+    cached = get_cached_json("economic_calendar", cache_key, ECONOMIC_CALENDAR_TTL_SECONDS)
+    if cached:
+        return cached
+
+    try:
+        response = requests.get(FRED_RELEASE_DATES_URL, params=params, timeout=20)
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:
+        stale = get_stale_cached_json(
+            "economic_calendar",
+            cache_key,
+            ECONOMIC_CALENDAR_STALE_SECONDS,
+        )
+        if stale:
+            return stale
+        raise
+
+    set_cached_json("economic_calendar", cache_key, payload)
+    return payload
 
 
 def normalize_trading_economics_event(item):

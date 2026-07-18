@@ -5,10 +5,14 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from data.local_cache import get_cached_json, get_stale_cached_json, set_cached_json, ttl_seconds
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = PROJECT_ROOT / ".env"
 FRED_OBSERVATIONS_URL = "https://api.stlouisfed.org/fred/series/observations"
+FRED_SERIES_TTL_SECONDS = ttl_seconds(hours=6)
+FRED_STALE_FALLBACK_SECONDS = ttl_seconds(days=7)
 
 
 FRED_SERIES = [
@@ -136,12 +140,19 @@ def fetch_latest_observation(api_key, config):
         "limit": 12,
         "units": config["units"],
     }
+    cache_key = f"series:{config['id']}:{config['units']}"
+    cached = get_cached_json("fred", cache_key, FRED_SERIES_TTL_SECONDS)
+    if cached:
+        return cached
 
     try:
         response = requests.get(FRED_OBSERVATIONS_URL, params=params, timeout=15)
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
+        stale = get_stale_cached_json("fred", cache_key, FRED_STALE_FALLBACK_SECONDS)
+        if stale:
+            return stale
         return {
             **base_series(config),
             "error": f"Could not fetch FRED series: {exc}",
@@ -150,18 +161,24 @@ def fetch_latest_observation(api_key, config):
     observations = payload.get("observations", [])
     latest = first_numeric_observation(observations)
     if latest is None:
+        stale = get_stale_cached_json("fred", cache_key, FRED_STALE_FALLBACK_SECONDS)
+        if stale:
+            return stale
         return {
             **base_series(config),
             "error": "No numeric observations returned.",
         }
 
-    return {
+    result = {
         **base_series(config),
         "date": latest["date"],
         "value": latest["value"],
         "realtime_start": latest.get("realtime_start"),
         "realtime_end": latest.get("realtime_end"),
+        "cache": {"status": "fresh"},
     }
+    set_cached_json("fred", cache_key, result)
+    return result
 
 
 def base_series(config):

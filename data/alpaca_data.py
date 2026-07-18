@@ -5,11 +5,15 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from data.local_cache import get_cached_json, get_stale_cached_json, set_cached_json, ttl_seconds
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = PROJECT_ROOT / ".env"
 ALPACA_DATA_BASE_URL = "https://data.alpaca.markets/v2"
 DEFAULT_TIMEOUT = 15
+LATEST_BARS_TTL_SECONDS = ttl_seconds(minutes=2)
+STALE_FALLBACK_SECONDS = ttl_seconds(minutes=30)
 
 
 def get_alpaca_credentials():
@@ -50,6 +54,11 @@ def fetch_latest_stock_bars(symbols, feed=None):
         "symbols": ",".join(symbols),
         "feed": feed or credentials["feed"],
     }
+    cache_key = f"latest-bars:{params['feed']}:{','.join(symbols)}"
+    cached = get_cached_json("alpaca", cache_key, LATEST_BARS_TTL_SECONDS)
+    if cached:
+        return cached
+
     headers = {
         "APCA-API-KEY-ID": credentials["api_key"],
         "APCA-API-SECRET-KEY": credentials["secret_key"],
@@ -65,9 +74,11 @@ def fetch_latest_stock_bars(symbols, feed=None):
         )
         response.raise_for_status()
     except requests.HTTPError as exc:
-        return build_error_response(exc, response=exc.response)
+        stale = get_stale_cached_json("alpaca", cache_key, STALE_FALLBACK_SECONDS)
+        return stale or build_error_response(exc, response=exc.response)
     except requests.RequestException as exc:
-        return build_error_response(exc)
+        stale = get_stale_cached_json("alpaca", cache_key, STALE_FALLBACK_SECONDS)
+        return stale or build_error_response(exc)
 
     data = response.json()
     raw_bars = data.get("bars") if isinstance(data, dict) else None
@@ -80,7 +91,7 @@ def fetch_latest_stock_bars(symbols, feed=None):
         if normalized:
             bars[symbol.upper()] = normalized
 
-    return {
+    result = {
         "provider": "Alpaca",
         "configured": True,
         "status": "ok" if bars else "empty",
@@ -89,7 +100,10 @@ def fetch_latest_stock_bars(symbols, feed=None):
         "bars": bars,
         "symbol_count": len(symbols),
         "bar_count": len(bars),
+        "cache": {"status": "fresh"},
     }
+    set_cached_json("alpaca", cache_key, result)
+    return result
 
 
 def normalize_bar(symbol, bar, feed):

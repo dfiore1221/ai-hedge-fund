@@ -245,5 +245,5 @@ See `docs/data_quality_systems_research.md` for the current data-provider resear
 - [x] Add starter news / analyst feed. Uses Finnhub company news and recommendation trends when `FINNHUB_API_KEY` is configured, with Yahoo starter headlines and analyst actions as fallback.
 - [x] Add better market data provider. Uses Alpaca latest stock bars when `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` are configured, with Yahoo as fallback.
 - [ ] Add options data provider.
-- [ ] Add local data cache.
+- [x] Add local data cache. Stores successful provider JSON responses under ignored `data_cache/` with short TTLs and stale fallback where appropriate.
 - [ ] Add provider comparison checks.
