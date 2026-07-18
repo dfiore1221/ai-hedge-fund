@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 from agents.feedback_loop import generate_feedback_report
 from data.data_quality import generate_data_health_report
-from data.portfolio import analyze_portfolio_exposure
+from data.paper_ledger import build_paper_ledger
 from data.trade_journal import (
     OPEN_STATUSES,
     TRADE_JOURNAL_PATH,
@@ -298,7 +298,8 @@ def render_trade_journal():
     if refresh_prices:
         save_trade_journal(journal)
     summary = summarize_trade_journal(journal)
-    account = analyze_portfolio_exposure()
+    ledger = build_paper_ledger(journal)
+    account = ledger["account"]
     summary = {
         "open_trades": 0,
         "closed_trades": 0,
@@ -311,25 +312,30 @@ def render_trade_journal():
         "week_realized_pnl": 0,
         **summary,
     }
-    account = {
-        "cash": 100000,
-        "liquid_cash": 100000,
-        "total_value": 100000,
-        "open_position_value": 0,
-        "planned_position_value": 0,
-        **account,
-    }
     statuses = journal["status"].str.lower() if not journal.empty else pd.Series(dtype=str)
     open_trades = journal[statuses.isin(OPEN_STATUSES)] if not journal.empty else journal
     closed_trades = journal[statuses == "closed"] if not journal.empty else journal
 
     st.markdown("#### Paper Account")
-    a1, a2, a3, a4, a5 = st.columns(5)
-    a1.metric("Starting Capital", money(account["cash"]))
-    a2.metric("Est. Liquid Cash", money(account["liquid_cash"]))
-    a3.metric("Est. Equity", money(account["total_value"]))
-    a4.metric("Open Value", money(account["open_position_value"]))
-    a5.metric("Planned Value", money(account["planned_position_value"]))
+    a1, a2, a3, a4, a5, a6 = st.columns(6)
+    a1.metric("Net Liquidation", money(account["net_liquidation_value"]))
+    a2.metric("Cash Balance", money(account["cash_balance"]))
+    a3.metric("Buying Power", money(account["buying_power"]))
+    a4.metric("Market Value", money(account["market_value"]))
+    a5.metric("Unrealized P&L", money(account["unrealized_pnl"]))
+    a6.metric("Realized P&L", money(account["realized_pnl"]))
+    st.caption(
+        f"Starting capital: {money(account['starting_cash'])} | "
+        f"Planned orders: {money(account['planned_order_value'])} | "
+        f"Open risk: {money(account['open_risk'])}"
+    )
+
+    warnings = [
+        warning for warning in ledger.get("warnings", [])
+        if not warning.startswith("Paper ledger excludes")
+    ]
+    for warning in warnings:
+        st.warning(warning)
 
     st.markdown("#### Trade Journal")
     c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -345,6 +351,57 @@ def render_trade_journal():
         f"Today realized: {money(summary['today_realized_pnl'])} | "
         f"Week realized: {money(summary['week_realized_pnl'])}"
     )
+
+    st.markdown("#### Positions")
+    positions = pd.DataFrame(ledger["positions"])
+    if positions.empty:
+        st.info("No open simulated positions.")
+    else:
+        st.dataframe(
+            positions[[
+                "symbol",
+                "side",
+                "quantity",
+                "average_cost",
+                "last_price",
+                "market_value",
+                "unrealized_pnl",
+                "planned_risk",
+                "lots",
+            ]],
+            hide_index=True,
+            width="stretch",
+        )
+
+    st.markdown("#### Ledger Transactions")
+    transactions = pd.DataFrame(ledger["transactions"])
+    if transactions.empty:
+        st.info("No simulated account transactions yet.")
+    else:
+        st.dataframe(
+            transactions[[
+                "timestamp",
+                "action",
+                "symbol",
+                "side",
+                "quantity",
+                "price",
+                "gross_amount",
+                "cash_delta",
+                "cash_balance",
+                "trade_id",
+            ]].tail(100),
+            hide_index=True,
+            width="stretch",
+        )
+
+    if ledger.get("planned_orders"):
+        with st.expander("Planned Orders", expanded=False):
+            st.dataframe(
+                pd.DataFrame(ledger["planned_orders"]),
+                hide_index=True,
+                width="stretch",
+            )
 
     with st.expander("Add Simulated Trade", expanded=False):
         with st.form("add_trade"):

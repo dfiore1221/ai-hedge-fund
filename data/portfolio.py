@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from data.trade_journal import OPEN_STATUSES, enrich_trade_metrics, load_trade_journal, to_float
+from data.trade_journal import enrich_trade_metrics, load_trade_journal, to_float
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -98,7 +98,7 @@ def journal_positions():
 
     positions = []
     for _, trade in journal.iterrows():
-        if str(trade.get("status", "")).lower() not in OPEN_STATUSES:
+        if str(trade.get("status", "")).lower() != "open":
             continue
         symbol = str(trade.get("symbol", "")).upper().strip()
         shares = to_float(trade.get("shares"))

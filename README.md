@@ -15,6 +15,7 @@ python3 main.py portfolio MSFT
 python3 main.py journal summary
 python3 main.py journal open MSFT 400 380 430 10 --status planned --run-id RUN_ID
 python3 main.py journal close TRADE_ID 425 --reason target
+python3 main.py ledger summary
 python3 main.py feedback summary
 python3 main.py security check
 python3 main.py data-health today
@@ -53,6 +54,14 @@ The `journal open` and `journal close` commands:
 2. Close simulated trades with exit price, exit reason, and lessons learned.
 3. Keep all trade records local in ignored `portfolio/trade_journal.csv`.
 4. Do not place live trades.
+
+The `ledger summary` command:
+
+1. Rebuilds a paper account ledger from the simulated trade journal.
+2. Treats `open` trades as account transactions that debit or credit cash.
+3. Treats `planned` trades as orders/watch items that do not reduce cash.
+4. Tracks cash balance, buying power, net liquidation value, market value, realized P&L, unrealized P&L, planned order value, open risk, positions, and transactions.
+5. Excludes commissions, slippage, dividends, interest, borrow fees, and tax lots.
 
 The `feedback summary` command:
 
