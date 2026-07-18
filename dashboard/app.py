@@ -299,6 +299,26 @@ def render_trade_journal():
         save_trade_journal(journal)
     summary = summarize_trade_journal(journal)
     account = analyze_portfolio_exposure()
+    summary = {
+        "open_trades": 0,
+        "closed_trades": 0,
+        "total_realized_pnl": 0,
+        "open_unrealized_pnl": 0,
+        "open_planned_risk": 0,
+        "avg_r_multiple": 0,
+        "win_rate": 0,
+        "today_realized_pnl": 0,
+        "week_realized_pnl": 0,
+        **summary,
+    }
+    account = {
+        "cash": 100000,
+        "liquid_cash": 100000,
+        "total_value": 100000,
+        "open_position_value": 0,
+        "planned_position_value": 0,
+        **account,
+    }
     statuses = journal["status"].str.lower() if not journal.empty else pd.Series(dtype=str)
     open_trades = journal[statuses.isin(OPEN_STATUSES)] if not journal.empty else journal
     closed_trades = journal[statuses == "closed"] if not journal.empty else journal

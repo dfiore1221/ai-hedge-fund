@@ -19,6 +19,7 @@ reports/options/
 reports/news/
 reports/backtests/
 reports/feedback/
+reports/*.log
 data_cache/
 portfolio/holdings.json
 portfolio/trade_journal.csv
