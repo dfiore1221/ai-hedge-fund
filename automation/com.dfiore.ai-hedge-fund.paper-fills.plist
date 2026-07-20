@@ -8,7 +8,6 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/zsh</string>
     <string>/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund/scripts/run_paper_fills.sh</string>
   </array>
 
