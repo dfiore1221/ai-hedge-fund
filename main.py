@@ -245,6 +245,21 @@ def ledger(action):
     print(format_paper_ledger_summary(build_paper_ledger()))
 
 
+def fills(action):
+    if action.lower() not in {"check", "apply"}:
+        raise ValueError("Fills command supports: check, apply")
+
+    try:
+        from data.paper_fills import format_paper_fill_report, process_paper_fills
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    result = process_paper_fills(apply=action.lower() == "apply")
+    print(format_paper_fill_report(result))
+
+
 def get_cli_option(name, default=""):
     if name not in sys.argv:
         return default
@@ -537,6 +552,8 @@ def main():
         print("  python3 main.py journal open MSFT 400 380 430 10 --status planned --run-id RUN_ID")
         print("  python3 main.py journal close TRADE_ID 425 --reason target")
         print("  python3 main.py ledger summary")
+        print("  python3 main.py fills check")
+        print("  python3 main.py fills apply")
         print("  python3 main.py feedback summary")
         print("  python3 main.py security check")
         print("  python3 main.py data-health today")
@@ -580,6 +597,8 @@ def main():
             journal(ticker)
         elif command == "ledger":
             ledger(ticker)
+        elif command == "fills":
+            fills(ticker)
         elif command == "feedback":
             feedback(ticker)
         elif command == "security":

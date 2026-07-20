@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from agents.feedback_loop import generate_feedback_report
 from data.data_quality import generate_data_health_report
 from data.paper_ledger import build_paper_ledger
+from data.paper_fills import format_paper_fill_report, process_paper_fills
 from data.trade_journal import (
     OPEN_STATUSES,
     TRADE_JOURNAL_PATH,
@@ -291,9 +292,28 @@ def render_stock_charts():
 
 def render_trade_journal():
     st.subheader("Simulated Trade Journal")
-    st.caption("Local journal only. This does not place trades.")
+    st.caption("Local paper ledger only. This does not place real broker trades.")
 
-    refresh_prices = st.button("Refresh Open Trade Prices")
+    action_col1, action_col2, action_col3 = st.columns(3)
+    refresh_prices = action_col1.button("Refresh Open Trade Prices")
+    preview_fills = action_col2.button("Check Paper Fill Conditions")
+    apply_fills = action_col3.button("Apply Automatic Paper Fills")
+
+    if preview_fills or apply_fills:
+        with st.spinner("Checking planned entries, stops, and targets against latest prices..."):
+            fill_result = process_paper_fills(apply=apply_fills)
+        report = format_paper_fill_report(fill_result)
+        if fill_result["events"]:
+            if apply_fills:
+                st.success(f"Applied {len(fill_result['events'])} paper fill event(s).")
+            else:
+                st.info(f"{len(fill_result['events'])} paper fill event(s) are ready.")
+        else:
+            st.info("No paper fill conditions were hit.")
+        st.code(report, language="markdown")
+        if apply_fills:
+            st.rerun()
+
     journal = enrich_trade_metrics(load_trade_journal(), refresh_prices=refresh_prices)
     if refresh_prices:
         save_trade_journal(journal)
@@ -431,6 +451,8 @@ def render_trade_journal():
         if submitted:
             if not symbol:
                 st.error("Symbol is required.")
+            elif entry <= 0 or stop <= 0 or target <= 0 or shares <= 0:
+                st.error("Entry, stop, target, and shares must all be greater than zero.")
             else:
                 row = {
                     "symbol": symbol,
