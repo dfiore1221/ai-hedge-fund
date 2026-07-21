@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.dfiore.ai-hedge-fund.portfolio-ticker</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd "/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund"; export CLANG_MODULE_CACHE_PATH="/tmp/aihf_swift_module_cache"; mkdir -p "$CLANG_MODULE_CACHE_PATH"; SOURCE="/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund/desktop_ticker/PortfolioTicker.swift"; BINARY="/tmp/aihf_portfolio_ticker"; if [[ ! -x "$BINARY" || "$SOURCE" -nt "$BINARY" ]]; then swiftc "$SOURCE" -o "$BINARY" -framework AppKit; fi; exec "$BINARY"</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund</string>
+
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+
+  <key>StandardOutPath</key>
+  <string>/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund/reports/portfolio_ticker.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund/reports/portfolio_ticker.err.log</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>

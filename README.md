@@ -16,6 +16,7 @@ python3 main.py journal summary
 python3 main.py journal open MSFT 400 380 430 10 --status planned --run-id RUN_ID
 python3 main.py journal close TRADE_ID 425 --reason target
 python3 main.py ledger summary
+python3 main.py ticker status
 python3 main.py feedback summary
 python3 main.py review today
 python3 main.py security check
@@ -63,6 +64,30 @@ The `ledger summary` command:
 3. Treats `planned` trades as orders/watch items that do not reduce cash.
 4. Tracks cash balance, buying power, net liquidation value, market value, realized P&L, unrealized P&L, planned order value, open risk, positions, and transactions.
 5. Excludes commissions, slippage, dividends, interest, borrow fees, and tax lots.
+
+The `ticker status` command:
+
+1. Refreshes current prices for open simulated positions.
+2. Rebuilds the paper ledger.
+3. Prints a compact net-liquidation/P&L line, or JSON with `--json`.
+4. Powers the local macOS menu-bar portfolio ticker.
+
+To launch the macOS portfolio ticker:
+
+```bash
+cd "/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund"
+scripts/run_portfolio_ticker.sh
+```
+
+To start the portfolio ticker automatically at login:
+
+```bash
+cd "/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund"
+mkdir -p ~/Library/LaunchAgents
+cp automation/com.dfiore.ai-hedge-fund.portfolio-ticker.plist ~/Library/LaunchAgents/
+launchctl unload ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.portfolio-ticker.plist 2>/dev/null || true
+launchctl load ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.portfolio-ticker.plist
+```
 
 The `feedback summary` command:
 

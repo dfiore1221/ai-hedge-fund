@@ -245,6 +245,31 @@ def ledger(action):
     print(format_paper_ledger_summary(build_paper_ledger()))
 
 
+def portfolio_ticker(action):
+    if action.lower() != "status":
+        raise ValueError("Ticker command currently supports: status")
+
+    try:
+        from data.portfolio_ticker import (
+            build_portfolio_ticker_status,
+            format_portfolio_ticker_status,
+            status_to_json,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    status = build_portfolio_ticker_status(
+        refresh_prices="--no-refresh" not in sys.argv[3:],
+        save_prices="--no-save" not in sys.argv[3:],
+    )
+    if "--json" in sys.argv[3:]:
+        print(status_to_json(status))
+    else:
+        print(format_portfolio_ticker_status(status))
+
+
 def fills(action):
     if action.lower() not in {"check", "apply"}:
         raise ValueError("Fills command supports: check, apply")
@@ -582,6 +607,8 @@ def main():
         print("  python3 main.py journal open MSFT 400 380 430 10 --status planned --run-id RUN_ID")
         print("  python3 main.py journal close TRADE_ID 425 --reason target")
         print("  python3 main.py ledger summary")
+        print("  python3 main.py ticker status")
+        print("  python3 main.py ticker status --json")
         print("  python3 main.py fills check")
         print("  python3 main.py fills apply")
         print("  python3 main.py feedback summary")
@@ -628,6 +655,8 @@ def main():
             journal(ticker)
         elif command == "ledger":
             ledger(ticker)
+        elif command == "ticker":
+            portfolio_ticker(ticker)
         elif command == "fills":
             fills(ticker)
         elif command == "feedback":
