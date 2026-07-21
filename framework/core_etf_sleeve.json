@@ -1,0 +1,45 @@
+{
+  "version": "1.0",
+  "description": "Default paper portfolio core ETF sleeve policy.",
+  "target_sleeve_pct": 0.5,
+  "rebalance_band_pct": 0.05,
+  "cash_reserve_pct": 0.2,
+  "risk_profiles": {
+    "Risk-On": {
+      "target_sleeve_pct": 0.55,
+      "weights": {
+        "VOO": 0.25,
+        "QQQ": 0.25,
+        "SMH": 0.2,
+        "XLV": 0.15,
+        "XLE": 0.15
+      }
+    },
+    "Neutral": {
+      "target_sleeve_pct": 0.45,
+      "weights": {
+        "VOO": 0.3,
+        "QQQ": 0.2,
+        "SMH": 0.15,
+        "XLV": 0.2,
+        "XLE": 0.15
+      }
+    },
+    "Risk-Off": {
+      "target_sleeve_pct": 0.25,
+      "weights": {
+        "VOO": 0.35,
+        "QQQ": 0.1,
+        "SMH": 0.05,
+        "XLV": 0.25,
+        "XLE": 0.1,
+        "BIL": 0.15
+      }
+    }
+  },
+  "notes": [
+    "Core ETF sleeve is for paper portfolio construction, not live trade advice.",
+    "Rebalance weekly or when sleeve allocation drifts outside the rebalance band.",
+    "Keep a cash reserve for tactical single-name paper trades."
+  ]
+}

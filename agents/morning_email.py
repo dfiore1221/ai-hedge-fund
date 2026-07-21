@@ -15,6 +15,7 @@ def create_email_body(report):
     conditional = report["conditional_setups"]
     watch = report["worth_watching"]
     rejected = report["rejected_or_avoid"]
+    core_sleeve = report.get("core_etf_sleeve") or {}
 
     lines = [
         "AI Hedge Fund Morning Brief",
@@ -26,6 +27,12 @@ def create_email_body(report):
         f"Approved Simulated Trades: {len(approved)}",
         f"Conditional Setups: {len(conditional)}",
         f"Watchlist Setups: {len(watch)}",
+        "",
+        "Core ETF Sleeve",
+        f"Status: {core_sleeve.get('status', 'n/a')}",
+        f"Target Sleeve: {format_pct(core_sleeve.get('target_sleeve_pct'))} / {format_money(core_sleeve.get('target_sleeve_value', 0))}",
+        f"Current Sleeve: {format_pct(core_sleeve.get('current_sleeve_pct'))} / {format_money(core_sleeve.get('current_sleeve_value', 0))}",
+        "Desired Allocation: " + format_core_allocations(core_sleeve.get("desired_allocations", [])),
         "",
         "Approved Simulated Trades",
     ]
@@ -122,3 +129,25 @@ def format_number(value):
     if value is None:
         return "n/a"
     return f"{value:.2f}"
+
+
+def format_money(value):
+    if value is None:
+        return "n/a"
+    return f"${value:.2f}"
+
+
+def format_pct(value):
+    if value is None:
+        return "n/a"
+    return f"{float(value) * 100:.1f}%"
+
+
+def format_core_allocations(allocations):
+    if not allocations:
+        return "n/a"
+    return ", ".join(
+        f"{item['symbol']} {format_pct(item['target_weight'])}"
+        f" (~{item.get('suggested_shares', 0)} sh)"
+        for item in allocations
+    )

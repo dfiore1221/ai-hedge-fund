@@ -429,7 +429,7 @@ def render_trade_journal():
             symbol = col1.text_input("Symbol").upper().strip()
             side = col2.selectbox("Side", ["long", "short"])
             status = col3.selectbox("Status", ["planned", "open"])
-            source = col4.selectbox("Source", ["morning brief", "CIO", "manual", "research"])
+            source = col4.selectbox("Source", ["morning brief", "core sleeve", "CIO", "manual", "research"])
 
             col5, col6, col7, col8 = st.columns(4)
             entry = col5.number_input("Entry", min_value=0.0, value=0.0)
@@ -440,7 +440,7 @@ def render_trade_journal():
             col9, col10 = st.columns(2)
             setup_type = col9.selectbox(
                 "Setup Type",
-                ["breakout", "pullback", "trend continuation", "mean reversion", "event", "manual"],
+                ["breakout", "pullback", "core etf sleeve", "trend continuation", "mean reversion", "event", "manual"],
             )
             agent_run_id = col10.text_input("Agent Run ID", placeholder="optional")
 

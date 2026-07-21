@@ -5,7 +5,9 @@ from datetime import datetime
 from pathlib import Path
 
 from agents.cio import create_cio_summary
+from agents.core_etf_sleeve import analyze_core_etf_sleeve
 from agents.market_intelligence import generate_daily_market_intelligence
+from data.paper_ledger import build_paper_ledger
 from data.data_quality import generate_data_health_report
 from data.trade_journal import load_trade_journal, summarize_trade_journal
 
@@ -65,7 +67,10 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
     metadata_by_symbol = {entry["symbol"]: entry for entry in entries}
     data_health = generate_data_health_report(symbols=symbols, live_checks=True)
     macro_report = generate_daily_market_intelligence()
-    journal_summary = summarize_trade_journal(load_trade_journal())
+    journal = load_trade_journal()
+    journal_summary = summarize_trade_journal(journal)
+    ledger = build_paper_ledger(journal)
+    core_sleeve = analyze_core_etf_sleeve(macro_report, journal=journal, ledger=ledger)
     summaries = []
 
     for symbol in symbols:
@@ -117,6 +122,7 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
         "mode": "watch_only",
         "data_health": data_health,
         "journal_summary": journal_summary,
+        "core_etf_sleeve": core_sleeve,
         "macro": macro_report,
         "symbols_scanned": symbols,
         "top_n": max_ideas,
@@ -410,6 +416,7 @@ def format_morning_brief(report):
     data_health = report.get("data_health") or {}
     data_gate = data_health.get("gate") or {}
     journal_summary = report.get("journal_summary") or {}
+    core_sleeve = report.get("core_etf_sleeve") or {}
 
     lines = [
         "# AI Hedge Fund Morning Brief",
@@ -442,8 +449,23 @@ def format_morning_brief(report):
         f"- Open Planned Risk: {format_money(journal_summary.get('open_planned_risk', 0))}",
         f"- Open Symbols: {', '.join(journal_summary.get('open_symbols') or []) if journal_summary.get('open_symbols') else 'None'}",
         "",
+        "## Core ETF Sleeve",
+        f"- Status: {core_sleeve.get('status', 'n/a')}",
+        f"- Target Sleeve: {format_pct(core_sleeve.get('target_sleeve_pct'))} / {format_money(core_sleeve.get('target_sleeve_value', 0))}",
+        f"- Current Sleeve: {format_pct(core_sleeve.get('current_sleeve_pct'))} / {format_money(core_sleeve.get('current_sleeve_value', 0))}",
+        f"- Drift: {format_money(core_sleeve.get('drift_value', 0))} ({format_pct(core_sleeve.get('drift_pct'))})",
+        f"- Cash Reserve Policy: {format_pct(core_sleeve.get('cash_reserve_pct'))}",
+        "- Desired Allocation: "
+        + format_core_allocations(core_sleeve.get("desired_allocations", [])),
+        "",
+        "### Core ETF Actions",
+    ]
+    lines.extend([f"- {item}" for item in core_sleeve.get("actions", [])] or ["- None."])
+    lines.extend([
+        "",
         "## Approved Simulated Trades",
     ]
+    )
 
     append_idea_section(lines, report["approved_simulated_trades"], empty_text="None today.")
 
@@ -597,3 +619,19 @@ def format_money(value):
     if value is None:
         return "n/a"
     return f"${value:.2f}"
+
+
+def format_pct(value):
+    if value is None:
+        return "n/a"
+    return f"{float(value) * 100:.1f}%"
+
+
+def format_core_allocations(allocations):
+    if not allocations:
+        return "n/a"
+    return ", ".join(
+        f"{item['symbol']} {format_pct(item['target_weight'])}"
+        f" (~{item.get('suggested_shares', 0)} sh)"
+        for item in allocations
+    )
