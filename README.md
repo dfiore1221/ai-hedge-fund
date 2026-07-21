@@ -80,6 +80,19 @@ The `review today` command:
 4. Saves a daily self-review report in `reports/setup_review/`.
 5. Writes setup outcomes into local memory so future feedback can compare morning recommendations against what actually happened.
 
+To schedule the setup self-review for 4:20 PM on macOS:
+
+```bash
+cd "/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund"
+chmod +x scripts/run_daily_setup_review.sh
+mkdir -p ~/Library/LaunchAgents
+cp automation/com.dfiore.ai-hedge-fund.daily-setup-review.plist ~/Library/LaunchAgents/
+launchctl unload ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.daily-setup-review.plist 2>/dev/null || true
+launchctl load ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.daily-setup-review.plist
+```
+
+Logs are written to `reports/setup_review/automation.log`, `launchd.out.log`, and `launchd.err.log`.
+
 The `security check` command:
 
 1. Confirms required environment settings are present without printing secret values.

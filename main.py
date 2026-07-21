@@ -361,6 +361,8 @@ def project(action):
     print(f"Dashboard port: {os.getenv('DASHBOARD_PORT', '8501')}")
     print(f"Morning email script: {PROJECT_ROOT / 'scripts' / 'run_morning_email.sh'}")
     print(f"LaunchAgent plist: {PROJECT_ROOT / 'automation' / 'com.dfiore.ai-hedge-fund.morning-brief.plist'}")
+    print(f"Daily review script: {PROJECT_ROOT / 'scripts' / 'run_daily_setup_review.sh'}")
+    print(f"Daily review plist: {PROJECT_ROOT / 'automation' / 'com.dfiore.ai-hedge-fund.daily-setup-review.plist'}")
 
 
 def git_value(args):
