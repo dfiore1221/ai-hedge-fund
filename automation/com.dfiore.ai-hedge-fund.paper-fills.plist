@@ -8,7 +8,9 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund/scripts/run_paper_fills.sh</string>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd "/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund" &amp;&amp; mkdir -p reports/paper_fills &amp;&amp; day_of_week="$(date +%u)" &amp;&amp; time_hhmm="$(date +%H%M)" &amp;&amp; if [ "$day_of_week" -le 5 ] &amp;&amp; [ "$time_hhmm" -ge 0930 ] &amp;&amp; [ "$time_hhmm" -le 1605 ]; then .venv/bin/python main.py fills apply &gt;&gt; reports/paper_fills/automation.log 2&gt;&amp;1; fi</string>
   </array>
 
   <key>WorkingDirectory</key>
