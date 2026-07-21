@@ -17,6 +17,7 @@ python3 main.py journal open MSFT 400 380 430 10 --status planned --run-id RUN_I
 python3 main.py journal close TRADE_ID 425 --reason target
 python3 main.py ledger summary
 python3 main.py feedback summary
+python3 main.py review today
 python3 main.py security check
 python3 main.py data-health today
 python3 main.py project status
@@ -71,6 +72,14 @@ The `feedback summary` command:
 4. Scores linked agent calls against trade outcomes so Technical, Risk, CIO, Macro, Options, and Quant can be evaluated over time.
 5. Saves a local decision feedback report in `reports/feedback/`.
 
+The `review today` command:
+
+1. Loads the saved morning brief JSON snapshot from `reports/morning_brief/`.
+2. Replays the top recommendations against that day's intraday market action.
+3. Checks whether each idea triggered entry, hit Target 1, hit stop, or stayed open without reaching Target 1.
+4. Saves a daily self-review report in `reports/setup_review/`.
+5. Writes setup outcomes into local memory so future feedback can compare morning recommendations against what actually happened.
+
 The `security check` command:
 
 1. Confirms required environment settings are present without printing secret values.
@@ -112,7 +121,7 @@ The `morning today` command:
 5. Prints only the top 10 names per section while preserving the full scan in the saved report object.
 6. Summarizes results by category, including AI semiconductors, nuclear/power, space, quantum, healthcare, critical materials, and energy.
 7. Keeps the output watch-only unless Risk approves a paper-trade candidate.
-8. Saves the daily brief in `reports/morning_brief/`.
+8. Saves the daily brief in `reports/morning_brief/` as both the latest report and a timestamped markdown/JSON snapshot.
 9. Surfaces better-entry and pullback conditions instead of treating every imperfect setup as avoid.
 
 The `morning-email today` command:

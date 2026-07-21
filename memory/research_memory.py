@@ -49,6 +49,32 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS daily_setup_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_date TEXT NOT NULL,
+            source_morning_brief_created_at TEXT,
+            source_run_id TEXT,
+            symbol TEXT NOT NULL,
+            decision TEXT,
+            score REAL,
+            entry REAL,
+            stop REAL,
+            target_1 REAL,
+            day_open REAL,
+            day_high REAL,
+            day_low REAL,
+            day_close REAL,
+            entered INTEGER,
+            hit_target_1 INTEGER,
+            hit_stop INTEGER,
+            result TEXT,
+            pnl_pct REAL,
+            created_at TEXT NOT NULL,
+            output_json TEXT NOT NULL
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -301,6 +327,140 @@ def get_agent_reports_for_run(run_id):
         })
 
     return reports
+
+
+def save_daily_setup_review(report):
+    init_db()
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    review_date = report.get("review_date")
+    source_created_at = report.get("source_morning_brief_created_at")
+
+    cursor.execute("""
+        DELETE FROM daily_setup_reviews
+        WHERE review_date = ?
+          AND COALESCE(source_morning_brief_created_at, '') = COALESCE(?, '')
+    """, (review_date, source_created_at))
+
+    for setup in report.get("reviewed_setups", []):
+        cursor.execute("""
+            INSERT INTO daily_setup_reviews (
+                review_date,
+                source_morning_brief_created_at,
+                source_run_id,
+                symbol,
+                decision,
+                score,
+                entry,
+                stop,
+                target_1,
+                day_open,
+                day_high,
+                day_low,
+                day_close,
+                entered,
+                hit_target_1,
+                hit_stop,
+                result,
+                pnl_pct,
+                created_at,
+                output_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            review_date,
+            source_created_at,
+            setup.get("run_id"),
+            str(setup.get("symbol", "")).upper(),
+            setup.get("decision"),
+            setup.get("score"),
+            setup.get("entry"),
+            setup.get("stop"),
+            setup.get("target_1"),
+            setup.get("day_open"),
+            setup.get("day_high"),
+            setup.get("day_low"),
+            setup.get("day_close"),
+            int(bool(setup.get("entered"))),
+            int(bool(setup.get("hit_target_1"))),
+            int(bool(setup.get("hit_stop"))),
+            setup.get("result"),
+            setup.get("pnl_pct"),
+            datetime.now().isoformat(),
+            json.dumps(setup, default=str),
+        ))
+
+    conn.commit()
+    conn.close()
+
+
+def get_recent_daily_setup_reviews(limit=100):
+    init_db()
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            review_date,
+            symbol,
+            decision,
+            score,
+            entry,
+            stop,
+            target_1,
+            day_close,
+            entered,
+            hit_target_1,
+            hit_stop,
+            result,
+            pnl_pct,
+            output_json
+        FROM daily_setup_reviews
+        ORDER BY review_date DESC, id DESC
+        LIMIT ?
+    """, (limit,))
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    reviews = []
+    for row in rows:
+        (
+            review_date,
+            symbol,
+            decision,
+            score,
+            entry,
+            stop,
+            target_1,
+            day_close,
+            entered,
+            hit_target_1,
+            hit_stop,
+            result,
+            pnl_pct,
+            output_json,
+        ) = row
+        reviews.append({
+            "review_date": review_date,
+            "symbol": symbol,
+            "decision": decision,
+            "score": score,
+            "entry": entry,
+            "stop": stop,
+            "target_1": target_1,
+            "day_close": day_close,
+            "entered": bool(entered),
+            "hit_target_1": bool(hit_target_1),
+            "hit_stop": bool(hit_stop),
+            "result": result,
+            "pnl_pct": pnl_pct,
+            "output": json.loads(output_json),
+        })
+
+    return reviews
 
 
 def extract_final_rating(memo):

@@ -596,9 +596,31 @@ def get_display_symbol(summary):
 
 def save_morning_brief(report):
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = REPORTS_DIR / "daily_morning_brief.md"
-    path.write_text(format_morning_brief(report), encoding="utf-8")
-    return path
+    markdown = format_morning_brief(report)
+    timestamp = safe_timestamp(report.get("created_at") or datetime.now().isoformat())
+
+    latest_md_path = REPORTS_DIR / "daily_morning_brief.md"
+    latest_json_path = REPORTS_DIR / "daily_morning_brief.json"
+    archive_md_path = REPORTS_DIR / f"morning_brief_{timestamp}.md"
+    archive_json_path = REPORTS_DIR / f"morning_brief_{timestamp}.json"
+
+    latest_md_path.write_text(markdown, encoding="utf-8")
+    latest_json_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    archive_md_path.write_text(markdown, encoding="utf-8")
+    archive_json_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+
+    return latest_md_path
+
+
+def safe_timestamp(value):
+    return (
+        str(value)
+        .replace(":", "")
+        .replace("-", "")
+        .replace(".", "")
+        .replace("T", "_")
+        .replace(" ", "_")
+    )
 
 
 def count_decisions(summaries, status):

@@ -13,6 +13,11 @@ import yfinance as yf
 from dotenv import load_dotenv
 
 from agents.feedback_loop import generate_feedback_report
+from agents.daily_setup_review import (
+    format_daily_setup_review,
+    generate_daily_setup_review,
+    save_daily_setup_review_report,
+)
 from data.data_quality import generate_data_health_report
 from data.paper_ledger import build_paper_ledger
 from data.paper_fills import format_paper_fill_report, process_paper_fills
@@ -26,6 +31,7 @@ from data.trade_journal import (
     save_trade_journal,
     summarize_trade_journal,
 )
+from memory.research_memory import init_db
 from security.checks import build_security_report, redact_text
 
 
@@ -576,6 +582,16 @@ def render_feedback_loop():
     st.subheader("Decision Feedback Loop")
     st.caption("Scores simulated outcomes against setup type, source, decision tier, and linked agent calls.")
 
+    if st.button("Run Daily Setup Self-Review", type="primary"):
+        with st.spinner("Reviewing the morning setups against today's market action..."):
+            try:
+                setup_review = generate_daily_setup_review()
+                output_path = save_daily_setup_review_report(setup_review)
+                st.success(f"Daily setup review saved: {output_path}")
+                st.code(format_daily_setup_review(setup_review), language="markdown")
+            except Exception as exc:
+                st.error(redact_text(str(exc)))
+
     report = generate_feedback_report()
     expectancy = report["trade_expectancy"]
 
@@ -616,6 +632,13 @@ def render_feedback_loop():
     st.markdown("#### Missing Information")
     for item in report["missing_information"]:
         st.write(f"- {item}")
+
+    st.markdown("#### Recent Daily Setup Reviews")
+    setup_reviews = load_daily_setup_reviews()
+    if setup_reviews.empty:
+        st.info("No daily setup self-reviews saved yet.")
+    else:
+        st.dataframe(setup_reviews, hide_index=True, width="stretch")
 
 
 def render_research_memory():
@@ -823,6 +846,48 @@ def load_research_reports():
             "preview": memo[:500],
         })
     return pd.DataFrame(records)
+
+
+def load_daily_setup_reviews():
+    init_db()
+    if not DB_PATH.exists():
+        return pd.DataFrame()
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("""
+        SELECT
+            review_date,
+            symbol,
+            decision,
+            score,
+            entry,
+            stop,
+            target_1,
+            day_close,
+            entered,
+            hit_target_1,
+            hit_stop,
+            result,
+            pnl_pct
+        FROM daily_setup_reviews
+        ORDER BY review_date DESC, id DESC
+        LIMIT 100
+    """).fetchall()
+    conn.close()
+    return pd.DataFrame(rows, columns=[
+        "review_date",
+        "symbol",
+        "decision",
+        "score",
+        "entry",
+        "stop",
+        "target_1",
+        "day_close",
+        "entered",
+        "hit_target_1",
+        "hit_stop",
+        "result",
+        "pnl_pct",
+    ])
 
 
 def format_number(value):

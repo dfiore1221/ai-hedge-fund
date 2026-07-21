@@ -290,6 +290,34 @@ def feedback(action):
     print(f"Saved feedback report to: {output_path}")
 
 
+def review(action):
+    try:
+        from agents.daily_setup_review import (
+            format_daily_setup_review,
+            generate_daily_setup_review,
+            save_daily_setup_review_report,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    review_day = action.lower() if action.lower() == "today" else action
+    top_n_option = get_cli_option("--top", "")
+    top_n = int(top_n_option) if top_n_option else None
+    source_path = get_cli_option("--source", "")
+
+    report = generate_daily_setup_review(
+        review_day=review_day,
+        source_path=source_path or None,
+        top_n=top_n,
+        save_memory=True,
+    )
+    output_path = save_daily_setup_review_report(report)
+    print(format_daily_setup_review(report))
+    print(f"Saved daily setup review to: {output_path}")
+
+
 def security(action):
     if action.lower() != "check":
         raise ValueError("Security command currently supports: check")
@@ -555,6 +583,7 @@ def main():
         print("  python3 main.py fills check")
         print("  python3 main.py fills apply")
         print("  python3 main.py feedback summary")
+        print("  python3 main.py review today")
         print("  python3 main.py security check")
         print("  python3 main.py data-health today")
         print("  python3 main.py project status")
@@ -601,6 +630,8 @@ def main():
             fills(ticker)
         elif command == "feedback":
             feedback(ticker)
+        elif command == "review":
+            review(ticker)
         elif command == "security":
             security(ticker)
         elif command == "data-health":
