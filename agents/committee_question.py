@@ -23,11 +23,10 @@ def ask_committee(question, symbol=None, scope="ticker"):
         raise ValueError("Committee question cannot be blank.")
 
     scope = normalize_scope(scope, symbol)
-    if scope == "portfolio" and not symbol:
-        inferred_symbol = infer_symbol_from_question(question)
-        if inferred_symbol:
-            symbol = inferred_symbol
-            scope = "ticker"
+    inferred_symbol = infer_symbol_from_question(question)
+    if inferred_symbol and str(symbol or "").upper().strip() != inferred_symbol:
+        symbol = inferred_symbol
+        scope = "ticker"
     topic = infer_topic(question)
 
     if scope == "ticker":
@@ -160,8 +159,10 @@ def format_ticker_committee_answer(question, cio_report, learning_notes, positio
         lines.extend([
             f"- Status: {management['status']}",
             f"- Confidence: {format_number(decision.get('confidence'))}",
-            f"- Answer: {management['answer']}",
-            f"- Invalidation: {management['invalidation']}",
+            f"- Recommended action: {management['action']}",
+            f"- Why: {management['answer']}",
+            f"- Hard exit rule: {management['invalidation']}",
+            f"- Do not: {management['do_not']}",
             f"- Committee setup status: {decision.get('status') or 'n/a'}",
             "",
         ])
@@ -338,42 +339,74 @@ def build_position_management_view(position_context, cio_report):
     if not position_context.get("has_open_position"):
         return {
             "status": "NO OPEN POSITION",
+            "action": "No paper position to manage.",
             "answer": "No open simulated position was found for this symbol.",
             "invalidation": "n/a",
+            "do_not": "n/a",
         }
 
     current_price = position_context.get("current_price")
     stop = position_context.get("stop")
     target = position_context.get("target")
+    unrealized_pnl = position_context.get("unrealized_pnl")
+    planned_risk = position_context.get("planned_risk")
     technical = str(cio_report.get("technical_stance") or "").lower()
     risk_decision = str(cio_report.get("risk_decision") or "").lower()
     news = str(cio_report.get("news_stance") or "").lower()
+    setup_status = str((cio_report.get("final_decision") or {}).get("status") or "").upper()
 
     if stop and current_price and current_price <= stop:
         return {
             "status": "EXIT / STOP HIT",
+            "action": "Close the simulated position.",
             "answer": "The position has traded at or below the stop. The paper-trade rule says exit rather than debate the loss.",
             "invalidation": f"Stop was {format_money(stop)} and current price is {format_money(current_price)}.",
+            "do_not": "Do not move the stop lower to avoid realizing a planned loss.",
         }
 
     if target and current_price and current_price >= target:
         return {
             "status": "TAKE PROFIT / TARGET HIT",
+            "action": "Sell at Target 1 or convert to a human-approved trailing-stop plan.",
             "answer": "Target 1 has been reached. The planned paper-trade action is to take profit unless the human explicitly converts it to a trailing-stop plan.",
             "invalidation": f"Target was {format_money(target)} and current price is {format_money(current_price)}.",
+            "do_not": "Do not ignore the original target without writing a new exit rule.",
+        }
+
+    if setup_status == "NEEDS DATA":
+        return {
+            "status": "HOLD BY ORIGINAL PLAN / DATA LIMITED",
+            "action": f"Hold the existing simulated position, keep the stop at {format_money(stop)}, and do not add shares.",
+            "answer": (
+                f"The system does not have enough fresh data for a new conviction call, but the original trade plan is still intact: "
+                f"current price is {format_money(current_price)}, unrealized P&L is {format_money(unrealized_pnl)}, "
+                f"and the stop has not been hit. A small loss versus planned risk of {format_money(planned_risk)} is not, by itself, a reason to close. "
+                "The data-limited Risk veto blocks new/additional trades; it does not automatically force an exit from an already-open position."
+            ),
+            "invalidation": f"Exit if MRK trades at or below the stop near {format_money(stop)}, or if a fresh committee run with working data produces a specific exit/catalyst veto.",
+            "do_not": "Do not add to the position while data is incomplete; do not close early unless you are intentionally overriding the paper-trade plan.",
         }
 
     if technical in {"bullish", "neutral"} and risk_decision in {"conditional_setup", "approved_for_paper_trade"} and news != "negative_catalyst":
         return {
-            "status": "HOLD WITH ORIGINAL STOP",
-            "answer": "Keep holding for now. The position is open, the stop has not been hit, target has not been hit, and the current committee read does not show a fresh veto.",
+            "status": "HOLD WITH ORIGINAL STOP / DO NOT ADD",
+            "action": f"Hold the simulated position. Keep stop at {format_money(stop)} and target at {format_money(target)}.",
+            "answer": (
+                "The original position-management rules are still doing their job: the stop has not been hit, target has not been hit, "
+                "and the committee does not show a fresh exit veto."
+            ),
             "invalidation": f"Cut/exit if price hits the stop near {format_money(stop)}, if news turns clearly negative, or if Risk moves to a veto.",
+            "do_not": "Do not add shares or average down unless the committee creates a separate approved add-on plan.",
         }
 
     return {
-        "status": "REVIEW / TIGHTEN RISK",
-        "answer": "Do not add to the position. Keep it under review because at least one committee input weakened.",
-        "invalidation": f"Use the existing stop near {format_money(stop)} as the hard paper-trade exit unless the human closes it earlier.",
+        "status": "HOLD DEFENSIVELY / NO ADD",
+        "action": f"Hold for now, but treat {format_money(stop)} as a hard stop and do not add.",
+        "answer": (
+            "At least one committee input weakened, but the stop has not been hit. For a rule-based paper test, the cleaner action is to respect the original stop rather than discretionary-selling a normal drawdown."
+        ),
+        "invalidation": f"Exit if price hits {format_money(stop)}, if a clear negative catalyst appears, or if you choose to manually override the experiment.",
+        "do_not": "Do not lower the stop, add to the losing position, or call the trade failed before the stop/target rules are tested.",
     }
 
 
