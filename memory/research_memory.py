@@ -75,6 +75,25 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS committee_questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            symbol TEXT,
+            question TEXT NOT NULL,
+            topic TEXT,
+            run_id TEXT,
+            answer_markdown TEXT NOT NULL,
+            status TEXT,
+            confidence REAL,
+            learning_notes TEXT,
+            user_feedback TEXT,
+            user_feedback_at TEXT,
+            output_json TEXT NOT NULL
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -461,6 +480,139 @@ def get_recent_daily_setup_reviews(limit=100):
         })
 
     return reviews
+
+
+def save_committee_question(report):
+    init_db()
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO committee_questions (
+            created_at,
+            scope,
+            symbol,
+            question,
+            topic,
+            run_id,
+            answer_markdown,
+            status,
+            confidence,
+            learning_notes,
+            user_feedback,
+            user_feedback_at,
+            output_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        report.get("created_at") or datetime.now().isoformat(),
+        report.get("scope") or "unknown",
+        str(report.get("symbol", "")).upper() or None,
+        report.get("question") or "",
+        report.get("topic"),
+        report.get("run_id"),
+        report.get("answer_markdown") or "",
+        report.get("status"),
+        report.get("confidence"),
+        "\n".join(report.get("learning_notes", [])),
+        report.get("user_feedback"),
+        report.get("user_feedback_at"),
+        json.dumps(report, default=str),
+    ))
+
+    question_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return question_id
+
+
+def get_recent_committee_questions(limit=50):
+    init_db()
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            id,
+            created_at,
+            scope,
+            symbol,
+            question,
+            topic,
+            run_id,
+            answer_markdown,
+            status,
+            confidence,
+            learning_notes,
+            user_feedback,
+            user_feedback_at,
+            output_json
+        FROM committee_questions
+        ORDER BY id DESC
+        LIMIT ?
+    """, (limit,))
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    questions = []
+    for row in rows:
+        (
+            question_id,
+            created_at,
+            scope,
+            symbol,
+            question,
+            topic,
+            run_id,
+            answer_markdown,
+            status,
+            confidence,
+            learning_notes,
+            user_feedback,
+            user_feedback_at,
+            output_json,
+        ) = row
+        try:
+            output = json.loads(output_json)
+        except json.JSONDecodeError:
+            output = {"raw": output_json}
+        questions.append({
+            "id": question_id,
+            "created_at": created_at,
+            "scope": scope,
+            "symbol": symbol,
+            "question": question,
+            "topic": topic,
+            "run_id": run_id,
+            "answer_markdown": answer_markdown,
+            "status": status,
+            "confidence": confidence,
+            "learning_notes": learning_notes,
+            "user_feedback": user_feedback,
+            "user_feedback_at": user_feedback_at,
+            "output": output,
+        })
+
+    return questions
+
+
+def save_committee_question_feedback(question_id, feedback):
+    init_db()
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE committee_questions
+        SET user_feedback = ?, user_feedback_at = ?
+        WHERE id = ?
+    """, (feedback, datetime.now().isoformat(), question_id))
+
+    conn.commit()
+    conn.close()
 
 
 def extract_final_rating(memo):

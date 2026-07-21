@@ -13,6 +13,7 @@ import yfinance as yf
 from dotenv import load_dotenv
 
 from agents.feedback_loop import generate_feedback_report
+from agents.committee_question import ask_committee
 from agents.daily_setup_review import (
     format_daily_setup_review,
     generate_daily_setup_review,
@@ -31,7 +32,11 @@ from data.trade_journal import (
     save_trade_journal,
     summarize_trade_journal,
 )
-from memory.research_memory import init_db
+from memory.research_memory import (
+    get_recent_committee_questions,
+    init_db,
+    save_committee_question_feedback,
+)
 from security.checks import build_security_report, redact_text
 
 
@@ -64,6 +69,7 @@ def main():
         "Watchlist",
         "Simulated Trades",
         "Feedback Loop",
+        "Ask Committee",
         "Agent Debate",
         "Research Memory",
         "Settings",
@@ -82,10 +88,12 @@ def main():
     with tabs[5]:
         render_feedback_loop()
     with tabs[6]:
-        render_agent_debate()
+        render_ask_committee()
     with tabs[7]:
-        render_research_memory()
+        render_agent_debate()
     with tabs[8]:
+        render_research_memory()
+    with tabs[9]:
         render_settings()
 
 
@@ -639,6 +647,106 @@ def render_feedback_loop():
         st.info("No daily setup self-reviews saved yet.")
     else:
         st.dataframe(setup_reviews, hide_index=True, width="stretch")
+
+
+def render_ask_committee():
+    st.subheader("Ask The Committee")
+    st.caption(
+        "Ask a ticker-specific or portfolio-level question. The answer is saved to memory so later feedback can teach the committee."
+    )
+
+    entries = load_watchlist_entries()
+    labels = [format_watchlist_label(entry) for entry in entries]
+    label_to_symbol = {format_watchlist_label(entry): entry["symbol"] for entry in entries}
+
+    with st.form("committee_question_form"):
+        scope = st.radio(
+            "Question Type",
+            ["Ticker committee", "Portfolio / market committee"],
+            horizontal=True,
+        )
+        selected_symbol = ""
+        custom_symbol = ""
+        if scope == "Ticker committee":
+            col_symbol, col_custom = st.columns([2, 1])
+            selected_label = col_symbol.selectbox("Watchlist Symbol", labels, index=0 if labels else None)
+            custom_symbol = col_custom.text_input("Or custom ticker", placeholder="e.g. MRK").upper().strip()
+            selected_symbol = custom_symbol or label_to_symbol.get(selected_label, "")
+
+        question = st.text_area(
+            "Question",
+            placeholder="Example: Should we set up a pullback paper trade here, and what would invalidate it?",
+            height=120,
+        )
+        submitted = st.form_submit_button("Ask Committee", type="primary")
+
+    if submitted:
+        if not question.strip():
+            st.error("Question is required.")
+        elif scope == "Ticker committee" and not selected_symbol:
+            st.error("Pick a ticker or enter a custom one.")
+        else:
+            with st.spinner("The agents are reviewing the question together..."):
+                try:
+                    if scope == "Ticker committee":
+                        report = ask_committee(question, symbol=selected_symbol, scope="ticker")
+                    else:
+                        report = ask_committee(question, scope="portfolio")
+                    st.session_state["latest_committee_answer"] = report
+                    st.success(f"Committee answer saved to memory. Question ID: {report['question_id']}")
+                except Exception as exc:
+                    st.error(redact_text(str(exc)))
+
+    latest = st.session_state.get("latest_committee_answer")
+    if latest:
+        st.markdown("#### Latest Answer")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Scope", latest.get("scope", "n/a"))
+        c2.metric("Symbol", latest.get("symbol") or "Portfolio")
+        c3.metric("Status", latest.get("status") or "n/a")
+        c4.metric("Confidence", format_number(latest.get("confidence")))
+        st.markdown(latest["answer_markdown"])
+
+    st.markdown("#### Question Memory")
+    questions = get_recent_committee_questions(limit=25)
+    if not questions:
+        st.info("No committee questions have been saved yet.")
+        return
+
+    rows = []
+    for item in questions:
+        rows.append({
+            "id": item["id"],
+            "created_at": item["created_at"],
+            "scope": item["scope"],
+            "symbol": item["symbol"],
+            "topic": item["topic"],
+            "status": item["status"],
+            "confidence": item["confidence"],
+            "feedback": item["user_feedback"] or "",
+            "question": item["question"],
+        })
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+
+    st.markdown("#### Review Prior Answers")
+    for item in questions[:10]:
+        label = f"#{item['id']} | {item['created_at']} | {item['symbol'] or item['scope']} | {item['topic']}"
+        with st.expander(label):
+            st.write(f"**Question:** {item['question']}")
+            st.markdown(item["answer_markdown"])
+            st.caption(f"Current feedback: {item['user_feedback'] or 'none'}")
+            feedback_cols = st.columns(4)
+            feedback_options = [
+                ("Helpful", "helpful"),
+                ("Too cautious", "too_cautious"),
+                ("Too aggressive", "too_aggressive"),
+                ("Needs better data", "needs_better_data"),
+            ]
+            for column, (label_text, value) in zip(feedback_cols, feedback_options):
+                if column.button(label_text, key=f"committee_feedback_{item['id']}_{value}"):
+                    save_committee_question_feedback(item["id"], value)
+                    st.success("Feedback saved.")
+                    st.rerun()
 
 
 def render_research_memory():

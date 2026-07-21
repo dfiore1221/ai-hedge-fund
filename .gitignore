@@ -19,7 +19,9 @@ reports/options/
 reports/news/
 reports/backtests/
 reports/feedback/
+reports/committee_questions/
 reports/paper_fills/
+reports/setup_review/
 reports/*.log
 data_cache/
 portfolio/holdings.json

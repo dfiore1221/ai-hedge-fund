@@ -590,6 +590,25 @@ def cio(ticker):
     print(f"Saved CIO summary to: {output_path}")
 
 
+def ask(action):
+    try:
+        from agents.committee_question import ask_committee
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    if action.lower() in {"portfolio", "market", "account", "macro"}:
+        question = " ".join(sys.argv[3:]).strip()
+        report = ask_committee(question, scope="portfolio")
+    else:
+        question = " ".join(sys.argv[3:]).strip()
+        report = ask_committee(question, symbol=normalize_ticker(action), scope="ticker")
+
+    print(report["answer_markdown"])
+    print(f"Saved committee question to memory: {report['question_id']}")
+
+
 def main():
     if len(sys.argv) < 3:
         print("Usage:")
@@ -601,6 +620,8 @@ def main():
         print("  python3 main.py technical MSFT")
         print("  python3 main.py risk MSFT")
         print("  python3 main.py cio MSFT")
+        print('  python3 main.py ask MSFT "Should we set up this trade?"')
+        print('  python3 main.py ask portfolio "How is the account positioned?"')
         print("  python3 main.py earnings MSFT")
         print("  python3 main.py portfolio MSFT")
         print("  python3 main.py journal summary")
@@ -647,6 +668,8 @@ def main():
             risk(ticker)
         elif command == "cio":
             cio(ticker)
+        elif command == "ask":
+            ask(ticker)
         elif command == "earnings":
             earnings(ticker)
         elif command == "portfolio":

@@ -1,0 +1,335 @@
+import json
+from datetime import datetime
+from pathlib import Path
+
+from agents.cio import create_cio_summary, save_cio_report
+from agents.market_intelligence import generate_daily_market_intelligence
+from agents.feedback_loop import generate_feedback_report
+from data.data_quality import generate_data_health_report
+from data.paper_ledger import build_paper_ledger
+from data.trade_journal import load_trade_journal
+from memory.research_memory import save_agent_report, save_committee_question
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+REPORTS_DIR = PROJECT_ROOT / "reports" / "committee_questions"
+MORNING_BRIEF_JSON_PATH = PROJECT_ROOT / "reports" / "morning_brief" / "daily_morning_brief.json"
+
+
+def ask_committee(question, symbol=None, scope="ticker"):
+    question = str(question or "").strip()
+    if not question:
+        raise ValueError("Committee question cannot be blank.")
+
+    scope = normalize_scope(scope, symbol)
+    topic = infer_topic(question)
+
+    if scope == "ticker":
+        if not symbol:
+            raise ValueError("Ticker committee questions require a symbol.")
+        report = answer_ticker_question(question, symbol, topic)
+    else:
+        report = answer_portfolio_question(question, topic)
+
+    question_id = save_committee_question(report)
+    report["question_id"] = question_id
+    save_committee_question_report(report)
+    save_agent_report(
+        run_id=report["run_id"],
+        agent_name="Committee Question",
+        output=report,
+        symbol=report.get("symbol"),
+        stance=report.get("status"),
+        confidence=report.get("confidence"),
+    )
+    return report
+
+
+def answer_ticker_question(question, symbol, topic):
+    symbol = symbol.upper().strip()
+    cio_report = create_cio_summary(symbol)
+    save_cio_report(cio_report)
+
+    decision = cio_report.get("final_decision") or {}
+    trade_plan = cio_report.get("trade_plan") or {}
+    learning_notes = build_ticker_learning_notes(cio_report, topic)
+    answer = format_ticker_committee_answer(question, cio_report, learning_notes)
+
+    return {
+        "agent": "Committee Question",
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "scope": "ticker",
+        "symbol": symbol,
+        "question": question,
+        "topic": topic,
+        "run_id": cio_report["run_id"],
+        "status": decision.get("status"),
+        "confidence": decision.get("confidence"),
+        "answer_markdown": answer,
+        "learning_notes": learning_notes,
+        "committee_snapshot": compact_cio_snapshot(cio_report),
+        "suggested_trade_plan": trade_plan,
+    }
+
+
+def answer_portfolio_question(question, topic):
+    run_id = f"{datetime.now().strftime('%Y-%m-%d')}-portfolio-committee-question"
+    macro_report = generate_daily_market_intelligence()
+    ledger = build_paper_ledger(load_trade_journal())
+    data_health = generate_data_health_report(live_checks=False)
+    feedback = generate_feedback_report()
+    morning = load_latest_morning_brief_json()
+    learning_notes = build_portfolio_learning_notes(macro_report, ledger, data_health, feedback, topic)
+    answer = format_portfolio_committee_answer(
+        question,
+        run_id,
+        macro_report,
+        ledger,
+        data_health,
+        feedback,
+        morning,
+        learning_notes,
+    )
+
+    macro_assessment = macro_report.get("assessment") or {}
+    gate = data_health.get("gate") or {}
+    status = "REVIEW ONLY"
+    if gate.get("status") == "Pass" and macro_assessment.get("market_regime") == "Risk-On":
+        status = "READY FOR SELECTIVE PAPER REVIEW"
+    elif gate.get("status") in {"Watch Only", "Blocked"}:
+        status = "WATCH ONLY"
+
+    return {
+        "agent": "Committee Question",
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "scope": "portfolio",
+        "symbol": "PORTFOLIO",
+        "question": question,
+        "topic": topic,
+        "run_id": run_id,
+        "status": status,
+        "confidence": portfolio_confidence(data_health, macro_report),
+        "answer_markdown": answer,
+        "learning_notes": learning_notes,
+        "portfolio_snapshot": {
+            "macro": macro_assessment,
+            "data_quality": {
+                "score": data_health.get("data_quality_score"),
+                "gate": gate,
+            },
+            "account": ledger.get("account"),
+            "feedback": feedback.get("trade_expectancy"),
+            "morning_created_at": morning.get("created_at"),
+        },
+    }
+
+
+def format_ticker_committee_answer(question, cio_report, learning_notes):
+    decision = cio_report.get("final_decision") or {}
+    plan = cio_report.get("trade_plan") or {}
+    conflict_memo = cio_report.get("conflict_memo") or {}
+    devils = cio_report.get("devils_advocate") or {}
+
+    lines = [
+        "# Committee Answer",
+        "",
+        f"Question: {question}",
+        f"Run ID: {cio_report['run_id']}",
+        f"Symbol: {cio_report['symbol']}",
+        "",
+        "## Collective View",
+        f"- Status: {decision.get('status') or 'n/a'}",
+        f"- Confidence: {format_number(decision.get('confidence'))}",
+        f"- Reason: {decision.get('reason') or 'n/a'}",
+        "",
+        "## Agent Votes",
+        f"- Macro: {cio_report.get('market_regime')} ({cio_report.get('macro_score')}/100)",
+        f"- Technical: {cio_report.get('technical_stance')} (confidence {format_number(cio_report.get('technical_confidence'))})",
+        f"- Risk: {cio_report.get('risk_decision')}",
+        f"- News: {cio_report.get('news_stance') or 'n/a'}; top headline: {cio_report.get('news_top_headline') or 'n/a'}",
+        f"- Options: {cio_report.get('options_stance') or 'n/a'}",
+        f"- Quant: expectancy {format_number(cio_report.get('backtest_expectancy'))}%, sample {cio_report.get('backtest_sample_size') or 'n/a'}",
+        f"- Devil's Advocate: {conflict_memo.get('conflict_count', 0)} conflict(s)",
+        "",
+        "## Trade/Action Map",
+        f"- Action: {plan.get('action') or 'n/a'}",
+        f"- Entry trigger: {format_number(plan.get('entry_trigger'))}",
+        f"- Suggested entry: {format_number(plan.get('suggested_entry'))}",
+        f"- Stop: {format_number(plan.get('stop'))}",
+        f"- Target 1: {format_number(plan.get('target_1'))}",
+        f"- Target 2: {format_number(plan.get('target_2'))}",
+        f"- Target 3: {format_number(plan.get('target_3'))}",
+        f"- Position size: {plan.get('position_size_shares') if plan.get('position_size_shares') is not None else 'n/a'} shares",
+        f"- Max dollar risk: {format_money(plan.get('max_dollar_risk'))}",
+        "",
+        "## Main Objections",
+    ]
+    lines.extend([f"- {item}" for item in devils.get("countercase", [])] or ["- None."])
+    lines.append("")
+    lines.append("## What This Teaches The System")
+    lines.extend([f"- {item}" for item in learning_notes] or ["- No learning notes generated."])
+    return "\n".join(lines) + "\n"
+
+
+def format_portfolio_committee_answer(
+    question,
+    run_id,
+    macro_report,
+    ledger,
+    data_health,
+    feedback,
+    morning,
+    learning_notes,
+):
+    assessment = macro_report.get("assessment") or {}
+    account = ledger.get("account") or {}
+    gate = data_health.get("gate") or {}
+    expectancy = feedback.get("trade_expectancy") or {}
+    morning_candidates = morning.get("summary", {}) if isinstance(morning.get("summary"), dict) else {}
+
+    lines = [
+        "# Committee Answer",
+        "",
+        f"Question: {question}",
+        f"Run ID: {run_id}",
+        "",
+        "## Collective View",
+        f"- Market regime: {assessment.get('market_regime')} ({assessment.get('macro_score')}/100)",
+        f"- Data gate: {gate.get('status')} - {gate.get('decision')}",
+        f"- Net liquidation: {format_money(account.get('net_liquidation_value'))}",
+        f"- Cash: {format_money(account.get('cash_balance'))}",
+        f"- Market value: {format_money(account.get('market_value'))}",
+        f"- Open risk: {format_money(account.get('open_risk'))}",
+        "",
+        "## Agent Read",
+        f"- Macro: {assessment.get('market_regime')} with confidence {assessment.get('confidence_score')}/100.",
+        f"- Risk: open risk is {format_money(account.get('open_risk'))}; buying power is {format_money(account.get('buying_power'))}.",
+        f"- Data Quality: score {data_health.get('data_quality_score')}/100; gate {gate.get('status')}.",
+        f"- Feedback Loop: closed trades {feedback.get('closed_trades_count')}; win rate {format_number(expectancy.get('win_rate'))}%; average R {format_number(expectancy.get('avg_r'))}.",
+        f"- Morning Brief: paper candidates {morning_candidates.get('paper_trade_candidates', 'n/a')}; conditional setups {morning_candidates.get('conditional_setups', 'n/a')}.",
+        "",
+        "## What This Teaches The System",
+    ]
+    lines.extend([f"- {item}" for item in learning_notes] or ["- No learning notes generated."])
+    return "\n".join(lines) + "\n"
+
+
+def build_ticker_learning_notes(cio_report, topic):
+    decision = cio_report.get("final_decision") or {}
+    plan = cio_report.get("trade_plan") or {}
+    notes = [
+        f"Tag this question as `{topic}` so later outcomes can be compared against this kind of committee judgment.",
+        f"Track whether the final status `{decision.get('status')}` was too conservative, too aggressive, or useful.",
+    ]
+
+    if plan.get("suggested_entry"):
+        notes.append(
+            "Monitor whether price reached the suggested entry before target or stop; this helps score patience versus chasing."
+        )
+    if cio_report.get("backtest_sample_size", 0) and cio_report.get("backtest_sample_size", 0) < 20:
+        notes.append("Backtest sample is small, so the review should discount expectancy until more examples accumulate.")
+    if cio_report.get("missing_information"):
+        notes.append("Use the missing-information list as a data-quality improvement queue.")
+    return notes
+
+
+def build_portfolio_learning_notes(macro_report, ledger, data_health, feedback, topic):
+    gate = data_health.get("gate") or {}
+    account = ledger.get("account") or {}
+    notes = [
+        f"Tag this as `{topic}` so future reviews can compare portfolio-level judgment separately from ticker calls.",
+        "Save whether the human found the answer helpful; that becomes a lightweight reward signal for the committee.",
+    ]
+    if gate.get("status") != "Pass":
+        notes.append("Data gate is not fully passing, so the committee should explain uncertainty before suggesting action.")
+    if account.get("open_risk", 0) > 0:
+        notes.append("Compare open risk against later realized/unrealized P&L to improve portfolio sizing discipline.")
+    if feedback.get("closed_trades_count", 0) == 0:
+        notes.append("No closed simulated trades yet, so feedback is still mostly setup-review based rather than trade-outcome based.")
+    return notes
+
+
+def compact_cio_snapshot(cio_report):
+    return {
+        "run_id": cio_report.get("run_id"),
+        "symbol": cio_report.get("symbol"),
+        "created_at": cio_report.get("created_at"),
+        "market_regime": cio_report.get("market_regime"),
+        "macro_score": cio_report.get("macro_score"),
+        "technical_stance": cio_report.get("technical_stance"),
+        "risk_decision": cio_report.get("risk_decision"),
+        "news_stance": cio_report.get("news_stance"),
+        "options_stance": cio_report.get("options_stance"),
+        "backtest_expectancy": cio_report.get("backtest_expectancy"),
+        "final_decision": cio_report.get("final_decision"),
+        "trade_plan": cio_report.get("trade_plan"),
+        "disagreements": cio_report.get("disagreements"),
+        "missing_information": cio_report.get("missing_information"),
+    }
+
+
+def save_committee_question_report(report):
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    symbol = report.get("symbol") or report.get("scope", "portfolio")
+    question_id = report.get("question_id", "latest")
+    path = REPORTS_DIR / f"{report['created_at'][:10]}_{symbol}_{question_id}.md"
+    path.write_text(report["answer_markdown"], encoding="utf-8")
+    return path
+
+
+def load_latest_morning_brief_json():
+    if not MORNING_BRIEF_JSON_PATH.exists():
+        return {}
+    try:
+        return json.loads(MORNING_BRIEF_JSON_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def normalize_scope(scope, symbol):
+    scope = str(scope or "").strip().lower()
+    if scope in {"portfolio", "market", "account", "macro"}:
+        return "portfolio"
+    if symbol:
+        return "ticker"
+    return "portfolio"
+
+
+def infer_topic(question):
+    text = question.lower()
+    patterns = {
+        "entry_timing": ["entry", "buy zone", "pullback", "breakout", "fill"],
+        "risk_sizing": ["risk", "size", "shares", "stop", "position"],
+        "portfolio_allocation": ["portfolio", "allocation", "sleeve", "rebalance", "cash"],
+        "macro_regime": ["macro", "regime", "fed", "rates", "inflation", "vix"],
+        "exit_plan": ["exit", "target", "sell", "take profit"],
+        "data_quality": ["data", "confidence", "missing", "source"],
+    }
+    for topic, words in patterns.items():
+        if any(word in text for word in words):
+            return topic
+    return "general_investment_committee"
+
+
+def portfolio_confidence(data_health, macro_report):
+    data_score = float(data_health.get("data_quality_score") or 0) / 100
+    macro_confidence = float((macro_report.get("assessment") or {}).get("confidence_score") or 0) / 100
+    return round((data_score * 0.6) + (macro_confidence * 0.4), 2)
+
+
+def format_number(value):
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def format_money(value):
+    if value is None:
+        return "n/a"
+    try:
+        return f"${float(value):,.2f}"
+    except (TypeError, ValueError):
+        return "n/a"

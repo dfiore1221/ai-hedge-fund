@@ -28,6 +28,8 @@ python3 main.py news MSFT
 python3 main.py backtest MSFT
 python3 main.py risk MSFT
 python3 main.py cio MSFT
+python3 main.py ask MSFT "Should we set up this trade?"
+python3 main.py ask portfolio "How is the account positioned?"
 python3 main.py analyze MSFT
 python3 main.py history MSFT
 python3 main.py thesis MSFT
@@ -96,6 +98,15 @@ The `feedback summary` command:
 3. Uses `agent_run_id` to connect trades back to the CIO committee run when available.
 4. Scores linked agent calls against trade outcomes so Technical, Risk, CIO, Macro, Options, and Quant can be evaluated over time.
 5. Saves a local decision feedback report in `reports/feedback/`.
+
+The `ask` command and dashboard Ask Committee tab:
+
+1. Lets you ask a ticker-specific or portfolio-level question.
+2. For ticker questions, runs the full committee path: Macro, Technical, Risk, News, Options, Quant, memory, conflict engine, Devil's Advocate, and CIO.
+3. For portfolio questions, reads macro, data quality, paper ledger, current portfolio exposure, and feedback-loop state.
+4. Saves the question, answer, topic, decision status, confidence, run ID, and learning notes to memory.
+5. Lets the human score the answer as helpful, too cautious, too aggressive, or needing better data.
+6. Keeps question report files local-only in `reports/committee_questions/`.
 
 The `review today` command:
 
