@@ -1,6 +1,8 @@
 import json
 import io
 import contextlib
+import os
+import signal
 from datetime import datetime
 from pathlib import Path
 
@@ -16,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WATCHLIST_PATH = PROJECT_ROOT / "framework" / "watchlist.json"
 REPORTS_DIR = PROJECT_ROOT / "reports" / "morning_brief"
 DEFAULT_TOP_N = 10
+DEFAULT_SYMBOL_TIMEOUT_SECONDS = 20
 
 
 def load_watchlist_entries():
@@ -156,8 +159,30 @@ def build_entries(symbols):
 
 def run_committee_scan(symbol, macro_report):
     # yfinance can print harmless ETF metadata warnings directly; keep the brief clean.
-    with contextlib.redirect_stderr(io.StringIO()):
-        return create_cio_summary(symbol, macro_report=macro_report)
+    with symbol_scan_timeout(), contextlib.redirect_stderr(io.StringIO()):
+        return create_cio_summary(symbol, macro_report=macro_report, include_options=False)
+
+
+@contextlib.contextmanager
+def symbol_scan_timeout(seconds=None):
+    seconds = seconds or int(os.getenv("MORNING_BRIEF_SYMBOL_TIMEOUT_SECONDS", DEFAULT_SYMBOL_TIMEOUT_SECONDS))
+    if not hasattr(signal, "SIGALRM") or seconds <= 0:
+        yield
+        return
+
+    def handle_timeout(signum, frame):
+        raise TimeoutError(f"Committee scan exceeded {seconds} seconds.")
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, seconds)
+    signal.signal(signal.SIGALRM, handle_timeout)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
 
 
 def build_error_summary(symbol, exc, macro_report):

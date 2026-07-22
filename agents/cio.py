@@ -21,7 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports" / "cio"
 
 
-def create_cio_summary(ticker, macro_report=None):
+def create_cio_summary(ticker, macro_report=None, include_options=True):
     ticker = ticker.upper().strip()
     run_id = build_run_id(ticker)
     macro_report = macro_report or generate_daily_market_intelligence()
@@ -29,7 +29,7 @@ def create_cio_summary(ticker, macro_report=None):
     risk_report = evaluate_trade_risk(ticker, technical_report=technical_report)
     memory_context = build_research_memory_context(ticker)
     news_report = collect_overnight_news(ticker)
-    options_report = analyze_options_flow(ticker)
+    options_report = analyze_options_flow(ticker) if include_options else build_options_skipped_report(ticker)
     backtest_report = backtest_sma_trend_strategy(ticker)
 
     agent_outputs = {
@@ -111,6 +111,25 @@ def create_cio_summary(ticker, macro_report=None):
         confidence=decision["confidence"],
     )
     return result
+
+
+def build_options_skipped_report(ticker):
+    return {
+        "agent": "Options & Flow Analyst",
+        "symbol": ticker.upper().strip(),
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "provider": "not_run",
+        "mode": "morning_brief_fast_path",
+        "stance": "unknown",
+        "confidence": 0,
+        "liquidity_quality": "unknown",
+        "warning": "Live starter options-chain scraping was skipped so the morning brief cannot be blocked by a non-critical Yahoo options feed.",
+        "missing_information": [
+            "Options flow unavailable or incomplete.",
+            "Live starter options-chain scraping skipped for morning brief reliability.",
+            "No paid OPRA/ORATS/Tradier options feed connected.",
+        ],
+    }
 
 
 def determine_final_decision(macro_report, technical_report, risk_report, memory_context, news_report=None):

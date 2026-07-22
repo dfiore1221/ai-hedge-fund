@@ -14,6 +14,7 @@ from data.finnhub_data import (
 )
 from data.fred_data import get_fred_macro_snapshot
 from data.local_cache import cache_summary
+from data.market_data import get_price_history
 from data.tiingo_data import fetch_latest_equity_prices, is_tiingo_configured
 
 
@@ -219,6 +220,39 @@ def build_provider_statuses():
 
 def check_price_history(symbol):
     try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            history = get_price_history(symbol, period="10d")
+    except Exception as exc:
+        return {
+            "symbol": symbol,
+            "status": "error",
+            "message": str(exc),
+        }
+
+    if not history or history.get("error"):
+        return {
+            "symbol": symbol,
+            "status": "error" if history and history.get("error") else "missing",
+            "message": (history or {}).get("error") or "No price history returned.",
+        }
+
+    latest_date = datetime.fromisoformat(history["latest_date"]).date()
+    calendar_age = (date.today() - latest_date).days
+    status = "ok" if calendar_age <= 5 else "stale"
+
+    return {
+        "symbol": symbol,
+        "status": status,
+        "latest_date": latest_date.isoformat(),
+        "calendar_age_days": calendar_age,
+        "latest_close": float(history["latest"]),
+        "rows": history.get("rows"),
+        "provider": history.get("provider"),
+    }
+
+
+def check_yahoo_price_history(symbol):
+    try:
         import yfinance as yf
     except ModuleNotFoundError:
         return {
@@ -229,7 +263,7 @@ def check_price_history(symbol):
 
     try:
         with contextlib.redirect_stderr(io.StringIO()):
-            history = yf.Ticker(symbol).history(period="10d", auto_adjust=True)
+            history = yf.Ticker(symbol).history(period="10d", auto_adjust=True, timeout=5)
     except Exception as exc:
         return {
             "symbol": symbol,
@@ -241,7 +275,7 @@ def check_price_history(symbol):
         return {
             "symbol": symbol,
             "status": "missing",
-            "message": "No price history returned.",
+            "message": "No Yahoo price history returned.",
         }
 
     close = history["Close"].dropna()
@@ -249,7 +283,7 @@ def check_price_history(symbol):
         return {
             "symbol": symbol,
             "status": "missing",
-            "message": "No close prices returned.",
+            "message": "No Yahoo close prices returned.",
         }
 
     latest_date = close.index[-1].date()
@@ -263,6 +297,7 @@ def check_price_history(symbol):
         "calendar_age_days": calendar_age,
         "latest_close": float(close.iloc[-1]),
         "rows": len(close),
+        "provider": "Yahoo Finance / yfinance",
     }
 
 
@@ -333,7 +368,7 @@ def check_market_price_provider(symbols):
 
     comparisons = []
     for symbol, provider_price in response.get(price_key, {}).items():
-        yahoo_check = check_price_history(symbol)
+        yahoo_check = check_yahoo_price_history(symbol)
         comparison = compare_price_sources(symbol, yahoo_check, provider_price)
         comparisons.append(comparison)
 
@@ -358,6 +393,13 @@ def compare_price_sources(symbol, yahoo_check, provider_price):
             "symbol": symbol,
             "status": "missing",
             "message": f"Yahoo comparison unavailable: {yahoo_check.get('message', yahoo_check.get('status'))}",
+        }
+
+    if yahoo_check.get("provider") != "Yahoo Finance / yfinance":
+        return {
+            "symbol": symbol,
+            "status": "missing",
+            "message": f"Yahoo comparison unavailable; shared price fallback used {yahoo_check.get('provider', 'unknown provider')}.",
         }
 
     yahoo_close = yahoo_check.get("latest_close")

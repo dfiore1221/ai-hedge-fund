@@ -114,24 +114,17 @@ def collect_overnight_news(ticker, limit=10):
     ticker = ticker.upper().strip()
     finnhub_configured = is_finnhub_configured()
     provider_status = []
+    yahoo_error = None
+    yf_ticker = None
 
     try:
         yf_ticker = yf.Ticker(ticker)
         aliases = build_symbol_aliases(ticker, yf_ticker)
         news_items = yf_ticker.news or []
     except Exception as exc:
-        return {
-            "agent": "Overnight News Analyst",
-            "symbol": ticker,
-            "error": f"Could not fetch news: {exc}",
-            "items": [],
-            "analyst_actions": [],
-            "summary": {},
-            "providers": [{"name": "Yahoo Finance", "status": "error", "detail": str(exc)}],
-            "missing_information": [
-                "Starter Yahoo news feed failed.",
-            ],
-        }
+        yahoo_error = str(exc)
+        aliases = build_static_symbol_aliases(ticker)
+        news_items = []
 
     items = []
     finnhub_news = {"status": "not_configured", "items": []}
@@ -151,16 +144,12 @@ def collect_overnight_news(ticker, limit=10):
             "detail": "FINNHUB_API_KEY is not configured.",
         })
 
-    provider_status.append({
-        "name": "Yahoo Finance",
-        "status": "ok" if news_items else "empty",
-        "detail": f"{len(news_items)} starter headlines returned.",
-    })
+    provider_status.append(build_yahoo_provider_status(news_items, yahoo_error))
     for item in news_items[:limit]:
         items.append(normalize_news_item(item, aliases))
 
     items = dedupe_news_items(items)[:limit]
-    analyst_actions = collect_analyst_actions(yf_ticker)
+    analyst_actions = collect_analyst_actions(yf_ticker) if yf_ticker is not None else []
     finnhub_recommendations = {"status": "not_configured", "items": []}
     if finnhub_configured:
         finnhub_recommendations = fetch_recommendation_trends(ticker)
@@ -172,6 +161,15 @@ def collect_overnight_news(ticker, limit=10):
         analyst_actions.extend(normalize_finnhub_recommendations(finnhub_recommendations.get("items", [])))
 
     summary = summarize_news(items, analyst_actions)
+    missing_information = build_missing_information(
+        finnhub_configured,
+        finnhub_news,
+        finnhub_recommendations,
+    )
+    if yahoo_error and not finnhub_configured:
+        missing_information.append("Starter Yahoo news feed failed.")
+    elif yahoo_error and not items:
+        missing_information.append("Starter Yahoo news feed failed and no Finnhub headlines were available.")
 
     return {
         "agent": "Overnight News Analyst",
@@ -183,12 +181,29 @@ def collect_overnight_news(ticker, limit=10):
         "stance": summary["stance"],
         "confidence": summary["confidence"],
         "providers": provider_status,
-        "missing_information": build_missing_information(
-            finnhub_configured,
-            finnhub_news,
-            finnhub_recommendations,
-        ),
+        "missing_information": missing_information,
     }
+
+
+def build_yahoo_provider_status(news_items, yahoo_error):
+    if yahoo_error:
+        return {
+            "name": "Yahoo Finance",
+            "status": "error",
+            "detail": yahoo_error,
+        }
+    return {
+        "name": "Yahoo Finance",
+        "status": "ok" if news_items else "empty",
+        "detail": f"{len(news_items)} starter headlines returned.",
+    }
+
+
+def build_static_symbol_aliases(ticker):
+    aliases = {ticker.lower()}
+    for alias in SYMBOL_ALIASES.get(ticker.upper(), []):
+        add_alias(aliases, alias)
+    return aliases
 
 
 def normalize_news_item(item, aliases):

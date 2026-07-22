@@ -11,7 +11,7 @@ from data.local_cache import get_cached_json, get_stale_cached_json, set_cached_
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = PROJECT_ROOT / ".env"
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
-DEFAULT_TIMEOUT = 15
+DEFAULT_TIMEOUT = 5
 COMPANY_NEWS_TTL_SECONDS = ttl_seconds(minutes=20)
 RECOMMENDATION_TTL_SECONDS = ttl_seconds(hours=12)
 STALE_FALLBACK_SECONDS = ttl_seconds(days=1)

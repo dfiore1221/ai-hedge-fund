@@ -1,5 +1,7 @@
 import yfinance as yf
 
+from data.tiingo_data import fetch_daily_equity_prices, is_tiingo_configured
+
 MACRO_TICKERS = {
     "sp500": "^GSPC",
     "nasdaq": "^IXIC",
@@ -28,6 +30,7 @@ SECTOR_ETFS = {
     "Real Estate": "XLRE",
     "Communication Services": "XLC",
 }
+YFINANCE_TIMEOUT_SECONDS = 5
 
 
 def dataframe_preview(frame, max_rows=8):
@@ -87,13 +90,24 @@ def get_company_data(ticker):
 
 
 def get_price_history(ticker, period="3mo"):
+    fallback = get_tiingo_price_history(ticker, period)
+    if fallback:
+        return fallback
+
     try:
-        history = yf.Ticker(ticker).history(period=period, auto_adjust=True)
+        history = yf.Ticker(ticker).history(
+            period=period,
+            auto_adjust=True,
+            timeout=YFINANCE_TIMEOUT_SECONDS,
+        )
     except Exception as exc:
-        return {"ticker": ticker, "error": str(exc)}
+        history = None
+        yahoo_error = str(exc)
+    else:
+        yahoo_error = None
 
     if history is None or history.empty:
-        return {"ticker": ticker, "error": "No price history returned."}
+        return {"ticker": ticker, "error": yahoo_error or "No price history returned."}
 
     close = history["Close"].dropna()
     if close.empty:
@@ -111,17 +125,30 @@ def get_price_history(ticker, period="3mo"):
         "period_change_pct": pct_change(latest, first),
         "twenty_day_change_pct": pct_change(latest, twenty_day_start),
         "latest_date": str(close.index[-1].date()),
+        "rows": len(close),
+        "provider": "Yahoo Finance / yfinance",
     }
 
 
 def get_ohlcv_history(ticker, period="6mo"):
+    fallback = get_tiingo_ohlcv_history(ticker, period)
+    if fallback:
+        return fallback
+
     try:
-        history = yf.Ticker(ticker).history(period=period, auto_adjust=True)
+        history = yf.Ticker(ticker).history(
+            period=period,
+            auto_adjust=True,
+            timeout=YFINANCE_TIMEOUT_SECONDS,
+        )
     except Exception as exc:
-        return {"ticker": ticker, "error": str(exc), "rows": []}
+        history = None
+        yahoo_error = str(exc)
+    else:
+        yahoo_error = None
 
     if history is None or history.empty:
-        return {"ticker": ticker, "error": "No OHLCV history returned.", "rows": []}
+        return {"ticker": ticker, "error": yahoo_error or "No OHLCV history returned.", "rows": []}
 
     rows = []
     for index, row in history.dropna(subset=["Close"]).iterrows():
@@ -137,8 +164,56 @@ def get_ohlcv_history(ticker, period="6mo"):
     return {
         "ticker": ticker.upper(),
         "period": period,
+        "provider": "Yahoo Finance / yfinance",
         "rows": rows,
     }
+
+
+def get_tiingo_price_history(ticker, period):
+    ohlcv = get_tiingo_ohlcv_history(ticker, period)
+    if not ohlcv:
+        return None
+    rows = ohlcv.get("rows", [])
+    closes = [row["close"] for row in rows if row.get("close") is not None]
+    if not closes:
+        return None
+    latest = closes[-1]
+    previous = closes[-2] if len(closes) > 1 else latest
+    first = closes[0]
+    twenty_day_start = closes[-21] if len(closes) >= 21 else first
+    return {
+        "ticker": ticker.upper(),
+        "latest": latest,
+        "one_day_change_pct": pct_change(latest, previous),
+        "period_change_pct": pct_change(latest, first),
+        "twenty_day_change_pct": pct_change(latest, twenty_day_start),
+        "latest_date": rows[-1]["date"],
+        "rows": len(rows),
+        "provider": "Tiingo",
+    }
+
+
+def get_tiingo_ohlcv_history(ticker, period):
+    if not is_tiingo_configured() or not is_tiingo_symbol_candidate(ticker):
+        return None
+    response = fetch_daily_equity_prices(ticker, period=period)
+    if response.get("status") != "ok" or not response.get("rows"):
+        return None
+    return {
+        "ticker": ticker.upper(),
+        "period": period,
+        "provider": "Tiingo",
+        "rows": response["rows"],
+    }
+
+
+def is_tiingo_symbol_candidate(ticker):
+    ticker = str(ticker or "").upper().strip()
+    if not ticker:
+        return False
+    if ticker.startswith("^") or "=" in ticker:
+        return False
+    return True
 
 
 def get_macro_market_snapshot():

@@ -29,6 +29,10 @@ from agents.position_manager import (
     generate_position_manager_report,
     save_position_manager_report,
 )
+from agents.core_etf_sleeve import (
+    approve_core_rebalance_from_brief,
+    build_core_rebalance_approval_id,
+)
 from agents.intraday_monitor import (
     format_intraday_monitor_report,
     run_intraday_monitor,
@@ -58,6 +62,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = PROJECT_ROOT / "memory" / "hedge_fund_memory.db"
 WATCHLIST_PATH = PROJECT_ROOT / "framework" / "watchlist.json"
 MORNING_BRIEF_PATH = PROJECT_ROOT / "reports" / "morning_brief" / "daily_morning_brief.md"
+MORNING_BRIEF_JSON_PATH = PROJECT_ROOT / "reports" / "morning_brief" / "daily_morning_brief.json"
 ENV_PATH = PROJECT_ROOT / ".env"
 
 
@@ -147,7 +152,80 @@ def render_morning_brief():
         c4.metric("Conditional", metrics.get("conditional_setups", "n/a"))
         c5.metric("Watchlist", metrics.get("watchlist_setups", "n/a"))
 
+    render_core_rebalance_approval(read_json(MORNING_BRIEF_JSON_PATH))
+
     st.markdown(brief)
+
+
+def render_core_rebalance_approval(brief_report):
+    core_sleeve = (brief_report or {}).get("core_etf_sleeve") or {}
+    if not core_sleeve:
+        return
+
+    status = core_sleeve.get("status", "n/a")
+    approval_id = build_core_rebalance_approval_id((brief_report or {}).get("created_at"))
+    with st.expander("Approve Core ETF Sleeve Rebalance", expanded=status == "Rebalance needed."):
+        st.caption("Paper-only workflow. This records simulated ETF lots in the local ledger; it does not send broker orders.")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Status", status)
+        c2.metric("Target Sleeve", money(core_sleeve.get("target_sleeve_value", 0)))
+        c3.metric("Current Sleeve", money(core_sleeve.get("current_sleeve_value", 0)))
+        c4.metric("Drift", money(core_sleeve.get("drift_value", 0)))
+
+        preview = build_core_rebalance_preview(core_sleeve)
+        if preview:
+            st.dataframe(pd.DataFrame(preview), hide_index=True, width="stretch")
+        else:
+            st.info("No core sleeve rebalance actions are available from the latest brief.")
+
+        st.caption(f"Approval ID: {approval_id}")
+        confirmed = st.checkbox(
+            "I approve AIFundOS to record these core ETF rebalance buys in the simulated paper ledger.",
+            key=f"confirm_{approval_id}",
+        )
+        disabled = not confirmed or not any(item["action"] == "buy" for item in preview)
+        if st.button("Approve Core Rebalance Paper Orders", disabled=disabled, type="primary"):
+            result = approve_core_rebalance_from_brief(brief_report)
+            if result["created"]:
+                st.success(f"Created {len(result['created'])} core sleeve paper lot(s).")
+                st.dataframe(pd.DataFrame(result["created"]), hide_index=True, width="stretch")
+            else:
+                st.info("No new core sleeve paper lots were created.")
+            if result["skipped"]:
+                with st.expander("Skipped Items", expanded=True):
+                    st.dataframe(pd.DataFrame(result["skipped"]), hide_index=True, width="stretch")
+            st.rerun()
+
+
+def build_core_rebalance_preview(core_sleeve):
+    rows = []
+    for item in core_sleeve.get("desired_allocations", []):
+        symbol = str(item.get("symbol", "")).upper().strip()
+        difference = float(item.get("difference") or 0)
+        last_price = float(item.get("last_price") or 0)
+        add_shares = int(difference // last_price) if difference > 0 and last_price > 0 else 0
+        if difference >= 100 and add_shares > 0:
+            action = "buy"
+            reason = "Add shares toward target sleeve."
+        elif difference <= -100:
+            action = "skip"
+            reason = "Trim needed; sell/trim automation is not enabled yet."
+        else:
+            action = "skip"
+            reason = "Difference is below the minimum rebalance notional."
+        rows.append({
+            "symbol": symbol,
+            "action": action,
+            "shares": add_shares if action == "buy" else 0,
+            "last_price": last_price,
+            "approx_notional": round(add_shares * last_price, 2),
+            "target_value": item.get("target_value"),
+            "current_value": item.get("current_value"),
+            "difference": item.get("difference"),
+            "reason": reason,
+        })
+    return rows
 
 
 def render_data_quality():
@@ -941,6 +1019,16 @@ def read_text(path):
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8", errors="replace")
+
+
+def read_json(path):
+    path = Path(path)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
 
 
 def parse_morning_metrics(text):

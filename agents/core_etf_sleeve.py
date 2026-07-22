@@ -3,12 +3,13 @@ from pathlib import Path
 
 from data.paper_fills import fetch_price_map
 from data.paper_ledger import build_paper_ledger
-from data.trade_journal import load_trade_journal, normalize_status, to_float
+from data.trade_journal import append_trade, load_trade_journal, normalize_status, to_float
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = PROJECT_ROOT / "framework" / "core_etf_sleeve.json"
 CORE_SETUP_TYPE = "core etf sleeve"
+CORE_REBALANCE_MIN_NOTIONAL = 100
 
 
 def analyze_core_etf_sleeve(macro_report, journal=None, ledger=None):
@@ -137,6 +138,124 @@ def build_actions(desired, sleeve_status):
         for row in desired
         if abs(row["difference"]) >= 100
     ]
+
+
+def approve_core_rebalance_from_brief(brief_report, min_notional=CORE_REBALANCE_MIN_NOTIONAL):
+    core_sleeve = brief_report.get("core_etf_sleeve") or {}
+    created_at = str(brief_report.get("created_at") or "").strip()
+    approval_id = build_core_rebalance_approval_id(created_at)
+    journal = load_trade_journal()
+    existing_keys = {
+        (
+            str(row.get("agent_run_id", "")).strip(),
+            str(row.get("symbol", "")).upper().strip(),
+        )
+        for _, row in journal.iterrows()
+    }
+
+    created = []
+    skipped = []
+    if core_sleeve.get("status") == "Within rebalance band.":
+        return {
+            "approval_id": approval_id,
+            "created": created,
+            "skipped": [{
+                "symbol": "CORE",
+                "reason": "Core ETF sleeve is already within the rebalance band.",
+            }],
+        }
+
+    for row in core_sleeve.get("desired_allocations", []):
+        symbol = str(row.get("symbol", "")).upper().strip()
+        difference = to_float(row.get("difference"))
+        last_price = to_float(row.get("last_price"))
+        if not symbol:
+            continue
+
+        if difference < -min_notional:
+            skipped.append({
+                "symbol": symbol,
+                "reason": "Trim needed, but partial trim automation is not enabled yet.",
+                "difference": round_money(difference),
+            })
+            continue
+
+        if difference < min_notional:
+            skipped.append({
+                "symbol": symbol,
+                "reason": "Difference is below the minimum rebalance notional.",
+                "difference": round_money(difference),
+            })
+            continue
+
+        if last_price <= 0:
+            skipped.append({
+                "symbol": symbol,
+                "reason": "No usable last price was available.",
+                "difference": round_money(difference),
+            })
+            continue
+
+        shares = int(difference // last_price)
+        if shares <= 0:
+            skipped.append({
+                "symbol": symbol,
+                "reason": "Difference is not large enough to buy one whole share.",
+                "difference": round_money(difference),
+                "last_price": round_money(last_price),
+            })
+            continue
+
+        key = (approval_id, symbol)
+        if key in existing_keys:
+            skipped.append({
+                "symbol": symbol,
+                "reason": "This brief approval already created a paper order for this symbol.",
+                "approval_id": approval_id,
+            })
+            continue
+
+        trade_id = append_trade({
+            "symbol": symbol,
+            "side": "long",
+            "status": "open",
+            "setup_type": CORE_SETUP_TYPE,
+            "source": "core sleeve",
+            "agent_run_id": approval_id,
+            "entry": last_price,
+            "stop": 0,
+            "target": 0,
+            "shares": shares,
+            "current_price": last_price,
+            "thesis": "Human-approved Core ETF Sleeve rebalance from AIFundOS morning brief.",
+            "notes": (
+                f"Core rebalance approval {approval_id}. "
+                f"Target value ${format_money_plain(row.get('target_value'))}; "
+                f"current value ${format_money_plain(row.get('current_value'))}; "
+                f"difference ${format_money_plain(difference)}. "
+                "Paper-only ledger action; no broker order was sent."
+            ),
+        })
+        existing_keys.add(key)
+        created.append({
+            "trade_id": trade_id,
+            "symbol": symbol,
+            "shares": shares,
+            "entry": round_money(last_price),
+            "notional": round_money(shares * last_price),
+            "difference": round_money(difference),
+        })
+
+    return {
+        "approval_id": approval_id,
+        "created": created,
+        "skipped": skipped,
+    }
+
+
+def build_core_rebalance_approval_id(created_at):
+    clean = "".join(char for char in created_at if char.isdigit())
+    return f"core-rebalance-{clean or 'manual'}"
 
 
 def top_sector_context(macro_report):

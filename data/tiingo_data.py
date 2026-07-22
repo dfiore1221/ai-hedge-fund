@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -11,9 +11,12 @@ from data.local_cache import get_cached_json, get_stale_cached_json, set_cached_
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = PROJECT_ROOT / ".env"
 TIINGO_INTRADAY_BASE_URL = "https://api.tiingo.com/tiingo/equity/intraday"
+TIINGO_DAILY_BASE_URL = "https://api.tiingo.com/tiingo/daily"
 DEFAULT_TIMEOUT = 15
 LATEST_PRICE_TTL_SECONDS = ttl_seconds(minutes=5)
+DAILY_PRICE_TTL_SECONDS = ttl_seconds(hours=6)
 STALE_FALLBACK_SECONDS = ttl_seconds(hours=2)
+DAILY_STALE_FALLBACK_SECONDS = ttl_seconds(days=3)
 
 
 def get_tiingo_api_key():
@@ -126,6 +129,130 @@ def fetch_latest_equity_price(symbol, api_key):
             "volume": safe_int(item.get("volume")),
             "source_field": price_source_field(item),
         },
+    }
+
+
+def fetch_daily_equity_prices(symbol, period="6mo"):
+    symbol = symbol.upper().strip()
+    api_key = get_tiingo_api_key()
+    if not symbol:
+        return {
+            "provider": "Tiingo",
+            "configured": is_tiingo_configured(),
+            "status": "skipped",
+            "symbol": symbol,
+            "rows": [],
+            "error": "No symbol supplied.",
+        }
+    if not api_key:
+        return {
+            "provider": "Tiingo",
+            "configured": False,
+            "status": "not_configured",
+            "symbol": symbol,
+            "rows": [],
+            "error": "TIINGO_API_KEY is not configured.",
+        }
+
+    start_date = period_start_date(period)
+    cache_key = f"daily-equity-prices:{symbol}:{period}:{start_date}"
+    cached = get_cached_json("tiingo", cache_key, DAILY_PRICE_TTL_SECONDS)
+    if cached:
+        return cached
+
+    headers = {
+        "Authorization": f"Token {api_key}",
+        "Accept": "application/json",
+    }
+    params = {
+        "startDate": start_date,
+        "resampleFreq": "daily",
+    }
+
+    try:
+        response = requests.get(
+            f"{TIINGO_DAILY_BASE_URL}/{symbol.lower()}/prices",
+            headers=headers,
+            params=params,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        stale = get_stale_cached_json("tiingo", cache_key, DAILY_STALE_FALLBACK_SECONDS)
+        return stale or build_daily_error(symbol, exc, response=exc.response)
+    except requests.RequestException as exc:
+        stale = get_stale_cached_json("tiingo", cache_key, DAILY_STALE_FALLBACK_SECONDS)
+        return stale or build_daily_error(symbol, exc)
+
+    payload = response.json()
+    if not isinstance(payload, list):
+        return build_daily_error(symbol, "Unexpected Tiingo daily price response.")
+
+    rows = [normalize_daily_row(item) for item in payload]
+    rows = [row for row in rows if row and row.get("close") is not None]
+    result = {
+        "provider": "Tiingo",
+        "configured": True,
+        "status": "ok" if rows else "empty",
+        "symbol": symbol,
+        "period": period,
+        "start_date": start_date,
+        "rows": rows,
+        "row_count": len(rows),
+        "cache": {"status": "fresh"},
+    }
+    set_cached_json("tiingo", cache_key, result)
+    return result
+
+
+def normalize_daily_row(item):
+    date_value = item.get("date")
+    close = safe_float(item.get("adjClose", item.get("close")))
+    if not date_value or close is None:
+        return None
+    return {
+        "date": str(date_value)[:10],
+        "open": safe_float(item.get("adjOpen", item.get("open"))) or close,
+        "high": safe_float(item.get("adjHigh", item.get("high"))) or close,
+        "low": safe_float(item.get("adjLow", item.get("low"))) or close,
+        "close": close,
+        "volume": safe_int(item.get("adjVolume", item.get("volume"))),
+    }
+
+
+def period_start_date(period):
+    today = date.today()
+    mapping = {
+        "10d": timedelta(days=20),
+        "1mo": timedelta(days=45),
+        "3mo": timedelta(days=120),
+        "6mo": timedelta(days=220),
+        "1y": timedelta(days=380),
+        "2y": timedelta(days=760),
+        "5y": timedelta(days=1900),
+    }
+    delta = mapping.get(str(period).lower(), timedelta(days=220))
+    return (today - delta).isoformat()
+
+
+def build_daily_error(symbol, error, response=None):
+    status_code = getattr(response, "status_code", None)
+    message = str(error)
+    if status_code == 401:
+        message = "Tiingo rejected the API token."
+    elif status_code == 404:
+        message = "Tiingo returned no daily price endpoint for this symbol."
+    elif status_code == 429:
+        message = "Tiingo rate limit reached."
+
+    return {
+        "provider": "Tiingo",
+        "configured": True,
+        "status": "error",
+        "symbol": symbol.upper(),
+        "rows": [],
+        "error": message,
+        "status_code": status_code,
     }
 
 
