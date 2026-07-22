@@ -24,6 +24,11 @@ from agents.daily_setup_review import (
     generate_daily_setup_review,
     save_daily_setup_review_report,
 )
+from agents.position_manager import (
+    format_position_manager_report,
+    generate_position_manager_report,
+    save_position_manager_report,
+)
 from data.data_quality import generate_data_health_report
 from data.paper_ledger import build_paper_ledger
 from data.paper_fills import format_paper_fill_report, process_paper_fills
@@ -73,6 +78,7 @@ def main():
         "Charts",
         "Watchlist",
         "Simulated Trades",
+        "Position Manager",
         "Feedback Loop",
         "Ask Committee",
         "Agent Debate",
@@ -91,14 +97,16 @@ def main():
     with tabs[4]:
         render_trade_journal()
     with tabs[5]:
-        render_feedback_loop()
+        render_position_manager()
     with tabs[6]:
-        render_ask_committee()
+        render_feedback_loop()
     with tabs[7]:
-        render_agent_debate()
+        render_ask_committee()
     with tabs[8]:
-        render_research_memory()
+        render_agent_debate()
     with tabs[9]:
+        render_research_memory()
+    with tabs[10]:
         render_settings()
 
 
@@ -570,6 +578,74 @@ def render_trade_journal():
         st.success("Trade journal saved.")
 
 
+def render_position_manager():
+    st.subheader("Position Manager")
+    st.caption("Daily paper-trade supervision: active positions, planned orders, stops, targets, and time-stop review.")
+
+    col1, col2 = st.columns([1, 4])
+    use_llm = col2.checkbox(
+        "Use OpenAI CIO summary for this run",
+        value=False,
+        help="Optional. The deterministic summary still runs if the API call is unavailable.",
+    )
+
+    if col1.button("Run Position Manager", type="primary"):
+        with st.spinner("Reviewing open and planned simulated trades..."):
+            try:
+                report = generate_position_manager_report(use_llm=use_llm)
+                output_path = save_position_manager_report(report)
+                st.success(f"Position manager report saved: {output_path}")
+                st.code(format_position_manager_report(report), language="markdown")
+            except Exception as exc:
+                st.error(redact_text(str(exc)))
+
+    latest_path = PROJECT_ROOT / "reports" / "position_manager" / "position_manager.json"
+    if not latest_path.exists():
+        st.info("No position manager report found yet. Run it to populate this page.")
+        return
+
+    try:
+        report = json.loads(latest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        st.error("The latest position manager report could not be read.")
+        return
+
+    summary = report.get("summary", {})
+    st.markdown("#### CIO Summary")
+    st.write(report.get("cio_summary", "No summary available."))
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Stance", str(summary.get("portfolio_stance", "unknown")).replace("_", " ").title())
+    c2.metric("Confidence", f"{summary.get('confidence_score', 0)}/100")
+    c3.metric("Open Trades", summary.get("open_trade_count", 0))
+    c4.metric("Planned Orders", summary.get("planned_trade_count", 0))
+    c5.metric("Open Risk", money(summary.get("open_risk", 0)))
+    c6.metric("Unrealized P&L", money(summary.get("unrealized_pnl", 0)))
+
+    st.markdown("#### Daily Portfolio Action List")
+    actions = pd.DataFrame(report.get("daily_action_list", []))
+    if actions.empty:
+        st.info("No position actions are active.")
+    else:
+        st.dataframe(actions, hide_index=True, width="stretch")
+
+    st.markdown("#### Open Trade Health")
+    open_trades = pd.DataFrame(report.get("open_trades", []))
+    if open_trades.empty:
+        st.info("No open simulated trades.")
+    else:
+        display = flatten_trade_health(open_trades)
+        st.dataframe(display, hide_index=True, width="stretch")
+
+    st.markdown("#### Planned Order Health")
+    planned = pd.DataFrame(report.get("planned_trades", []))
+    if planned.empty:
+        st.info("No planned simulated orders.")
+    else:
+        display = flatten_trade_health(planned)
+        st.dataframe(display, hide_index=True, width="stretch")
+
+
 def render_agent_debate():
     st.subheader("Agent Debate")
     reports = load_agent_reports()
@@ -1024,6 +1100,34 @@ def format_percent_display(value):
     if value is None:
         return "n/a"
     return f"{value:.1f}%"
+
+
+def flatten_trade_health(frame):
+    rows = []
+    for _, trade in frame.iterrows():
+        realism = trade.get("realism") if isinstance(trade.get("realism"), dict) else {}
+        time_stop = trade.get("time_stop") if isinstance(trade.get("time_stop"), dict) else {}
+        rows.append({
+            "symbol": trade.get("symbol"),
+            "status": trade.get("status"),
+            "side": trade.get("side"),
+            "entry": trade.get("entry"),
+            "current_price": trade.get("current_price"),
+            "stop": trade.get("stop"),
+            "target": trade.get("target"),
+            "shares": trade.get("shares"),
+            "planned_risk": trade.get("planned_risk"),
+            "open_r_multiple": trade.get("open_r_multiple"),
+            "days_open": trade.get("days_open"),
+            "days_planned": trade.get("days_planned"),
+            "realism": realism.get("rating"),
+            "atr_14": realism.get("atr_14"),
+            "stop_atr": realism.get("stop_atr"),
+            "target_atr": realism.get("target_atr"),
+            "target_window": realism.get("expected_time_to_target"),
+            "time_stop": time_stop.get("status"),
+        })
+    return pd.DataFrame(rows)
 
 
 @st.cache_data(ttl=120, show_spinner=False)

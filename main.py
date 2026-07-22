@@ -628,6 +628,28 @@ def ask(action):
     print(f"Saved committee question to memory: {report['question_id']}")
 
 
+def position_manager(period):
+    try:
+        from agents.position_manager import (
+            format_position_manager_report,
+            generate_position_manager_report,
+            save_position_manager_report,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    if str(period).lower() != "today":
+        raise ValueError("Position manager currently supports: today")
+
+    use_llm = "--llm" in sys.argv[3:]
+    report = generate_position_manager_report(use_llm=use_llm)
+    output_path = save_position_manager_report(report)
+    print(format_position_manager_report(report))
+    print(f"Saved position manager report to: {output_path}")
+
+
 def main():
     if len(sys.argv) < 3:
         print("Usage:")
@@ -654,6 +676,8 @@ def main():
         print("  python3 main.py feedback summary")
         print("  python3 main.py review today")
         print("  python3 main.py weekly-review today")
+        print("  python3 main.py position-manager today")
+        print("  python3 main.py position-manager today --llm")
         print("  python3 main.py security check")
         print("  python3 main.py data-health today")
         print("  python3 main.py project status")
@@ -708,6 +732,8 @@ def main():
             review(ticker)
         elif command == "weekly-review":
             weekly_review(ticker)
+        elif command == "position-manager":
+            position_manager(ticker)
         elif command == "security":
             security(ticker)
         elif command == "data-health":

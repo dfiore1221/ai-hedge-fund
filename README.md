@@ -20,6 +20,8 @@ python3 main.py ticker status
 python3 main.py feedback summary
 python3 main.py review today
 python3 main.py weekly-review today
+python3 main.py position-manager today
+python3 main.py position-manager today --llm
 python3 main.py security check
 python3 main.py data-health today
 python3 main.py project status
@@ -126,6 +128,16 @@ The `weekly-review today` command:
 3. Summarizes open/planned and closed simulated trades.
 4. Builds a target/stop table by symbol.
 5. Saves a Friday-style accountability review in `reports/weekly_review/`.
+
+The `position-manager today` command:
+
+1. Reviews all open and planned simulated trades from the local paper journal.
+2. Refreshes current prices, recalculates open P&L, and rebuilds the paper account ledger.
+3. Scores stop and target realism using ATR-based volatility checks.
+4. Applies open-trade aging and time-stop rules for multi-day swing trades.
+5. Produces a daily portfolio action list: exit, take profit, reassess, review levels, hold, or keep planned.
+6. Writes the Position Manager output to local memory so the Committee can learn from prior supervision.
+7. Uses a deterministic CIO summary by default; add `--llm` to request an OpenAI-generated plain-English CIO summary.
 
 To schedule the setup self-review for 4:20 PM on macOS:
 

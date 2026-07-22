@@ -23,6 +23,7 @@ reports/committee_questions/
 reports/paper_fills/
 reports/setup_review/
 reports/weekly_review/
+reports/position_manager/
 reports/*.log
 data_cache/
 portfolio/holdings.json
