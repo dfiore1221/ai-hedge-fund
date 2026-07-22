@@ -3,6 +3,7 @@ from pathlib import Path
 
 from agents.morning_brief import create_morning_brief, format_morning_brief, save_morning_brief
 from delivery.email_delivery import load_email_config, send_email
+from delivery.email_retry import queue_email
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -91,10 +92,35 @@ def send_morning_brief_email(dry_run=False):
             "report_path": output_path,
         }
 
-    result = send_email(subject, body, attachment_path=output_path)
+    try:
+        result = send_email(subject, body, attachment_path=output_path)
+    except Exception as exc:
+        pending_path = queue_email(
+            subject,
+            body,
+            attachment_path=output_path,
+            kind="morning_brief",
+            error=exc,
+            expiry_hours=8,
+        )
+        write_failure_log(exc, output_path, pending_path)
+        return {
+            "dry_run": False,
+            "sent": False,
+            "queued": True,
+            "subject": subject,
+            "body": body,
+            "report_path": output_path,
+            "pending_path": pending_path,
+            "error": str(exc),
+            "full_report": full_report,
+        }
+
     write_delivery_log(result, output_path)
     return {
         "dry_run": False,
+        "sent": True,
+        "queued": False,
         "subject": subject,
         "body": body,
         "report_path": output_path,
@@ -122,6 +148,17 @@ def write_delivery_log(result, report_path):
         file.write(
             f"{timestamp} sent to {result['to']} subject={result['subject']} "
             f"attachment={report_path}\n"
+        )
+
+
+def write_failure_log(error, report_path, pending_path):
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().isoformat(timespec="seconds")
+    log_path = LOG_DIR / "email_delivery.log"
+    with log_path.open("a", encoding="utf-8") as file:
+        file.write(
+            f"{timestamp} queued pending email after send failure error={error} "
+            f"attachment={report_path} pending={pending_path}\n"
         )
 
 

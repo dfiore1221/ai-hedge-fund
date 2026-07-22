@@ -9,6 +9,7 @@ python3 main.py dashboard start
 python3 main.py morning today
 python3 main.py morning-email today
 python3 main.py morning-email today --dry-run
+python3 main.py email-retry morning
 python3 main.py macro today
 python3 main.py earnings MSFT
 python3 main.py portfolio MSFT
@@ -238,6 +239,13 @@ The `morning-email today` command:
 2. Saves the markdown report in `reports/morning_brief/`.
 3. Sends a concise email summary with the full report attached.
 4. Supports `--dry-run` to validate email settings without sending.
+5. If SMTP/email delivery fails, queues the already-generated brief in `reports/email_queue/` for retry instead of losing it.
+
+The `email-retry morning` command:
+
+1. Retries pending morning brief emails without regenerating the morning brief.
+2. Sends the original subject, body, and markdown attachment once connectivity returns.
+3. Stops retrying queued emails after their expiry window or maximum attempt count.
 
 Required `.env` fields for email delivery:
 
@@ -272,6 +280,19 @@ launchctl load ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.morning-brief.pli
 ```
 
 Logs are written to `reports/morning_brief/automation.log`, `launchd.out.log`, and `launchd.err.log`.
+
+To schedule pending email retries every 10 minutes from 4:50 AM to noon on macOS:
+
+```bash
+cd "/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund"
+chmod +x scripts/run_email_retry.sh
+mkdir -p ~/Library/LaunchAgents
+cp automation/com.dfiore.ai-hedge-fund.email-retry.plist ~/Library/LaunchAgents/
+launchctl unload ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.email-retry.plist 2>/dev/null || true
+launchctl load ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.email-retry.plist
+```
+
+Retry logs are written to `reports/email_queue/automation.log`, `launchd.out.log`, and `launchd.err.log`.
 
 The `macro today` command:
 

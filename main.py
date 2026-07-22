@@ -489,8 +489,27 @@ def morning_email(period, dry_run=False):
     print(f"Saved morning brief to: {result['report_path']}")
     if dry_run:
         print("Dry run complete. Email settings are present; no email was sent.")
+    elif result.get("queued"):
+        print("Morning brief email was queued for retry.")
+        print(f"Pending email: {result['pending_path']}")
+        print(f"Send error: {result['error']}")
     else:
         print(f"Sent morning brief email: {result['subject']}")
+
+
+def email_retry(action):
+    try:
+        from delivery.email_retry import format_retry_report, retry_pending_emails
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    kind = None if str(action).lower() in {"all", "pending"} else str(action).lower()
+    if kind == "morning":
+        kind = "morning_brief"
+    report = retry_pending_emails(kind=kind)
+    print(format_retry_report(report))
 
 
 def dashboard(_arg=None):
@@ -683,6 +702,7 @@ def main():
         print("  python3 main.py morning today")
         print("  python3 main.py morning-email today")
         print("  python3 main.py morning-email today --dry-run")
+        print("  python3 main.py email-retry morning")
         print("  python3 main.py macro today")
         print("  python3 main.py technical MSFT")
         print("  python3 main.py risk MSFT")
@@ -732,6 +752,8 @@ def main():
             morning(ticker)
         elif command == "morning-email":
             morning_email(ticker, dry_run=dry_run)
+        elif command == "email-retry":
+            email_retry(ticker)
         elif command == "macro":
             macro(ticker)
         elif command == "technical":
