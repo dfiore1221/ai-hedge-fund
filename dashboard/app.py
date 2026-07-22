@@ -305,8 +305,8 @@ def render_stock_charts():
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Symbol", symbol)
-    c2.metric("Last", f"{latest:.2f}", f"{change:.2f} / {change_pct:.2f}%")
-    c3.metric("Rows", len(history))
+    c2.metric("Last", format_number(latest), f"{format_number(change)} / {change_pct:.2f}%")
+    c3.metric("Rows", format_integer(len(history)))
     c4.metric("Last Update", str(history.index[-1]))
 
     chart_data = history[["Close"]].rename(columns={"Close": symbol})
@@ -1116,9 +1116,16 @@ def load_daily_setup_reviews():
 
 def format_number(value):
     try:
-        return f"{float(value):.2f}"
+        return f"{float(value):,.2f}"
     except (TypeError, ValueError):
         return "0.00"
+
+
+def format_integer(value):
+    try:
+        return f"{int(value):,}"
+    except (TypeError, ValueError):
+        return "0"
 
 
 def format_percent_display(value):
