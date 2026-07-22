@@ -31,11 +31,15 @@ def generate_daily_setup_review(review_day=None, source_path=None, top_n=None, s
         "agent": "Daily Setup Review",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "review_date": review_date.isoformat(),
+        "review_mode": "swing_trade_day_check",
+        "intended_horizon": "multi-day swing trade",
         "source_morning_brief_path": str(source),
         "source_morning_brief_created_at": morning.get("created_at"),
         "top_n": len(ideas),
         "summary": summarize_reviews(reviewed),
         "reviewed_setups": reviewed,
+        "market_context": build_market_context(reviewed),
+        "missed_context_scan": build_missed_context_scan(reviewed),
         "self_review_lessons": build_self_review_lessons(reviewed),
     }
 
@@ -166,6 +170,9 @@ def review_setup_idea(idea, review_date):
         "max_adverse_move_pct": None,
         "data_source": "Yahoo Finance / yfinance",
         "data_error": "",
+        "swing_status": "unreviewed",
+        "follow_up_required": True,
+        "follow_up_reason": "",
     }
 
     if not symbol or not entry or not stop or not target_1:
@@ -224,6 +231,9 @@ def review_with_intraday(base, intraday):
 
     if not base["entered"]:
         base["result"] = "NO ENTRY"
+        base["swing_status"] = "not_triggered"
+        base["follow_up_required"] = True
+        base["follow_up_reason"] = "Entry did not trigger today; keep on watch only if the setup remains valid."
         base["pnl_pct"] = 0
         base["target_touched_without_entry"] = target_hit(intraday, side, target_1)
         return base
@@ -239,23 +249,36 @@ def review_with_intraday(base, intraday):
         if stop_hit_bar(bar, side, stop):
             base["hit_stop"] = True
             base["result"] = "STOP FIRST"
+            base["swing_status"] = "failed_stop"
+            base["follow_up_required"] = False
+            base["follow_up_reason"] = "Stop was hit; setup should be reviewed as a closed loss."
             base["exit_time"] = timestamp.strftime("%H:%M")
             base["pnl_pct"] = round(pnl_pct(side, entry, stop), 2)
             return base
         if target_hit_bar(bar, side, target_1):
             base["hit_target_1"] = True
             base["result"] = "TARGET 1 HIT"
+            base["swing_status"] = "target_1_hit"
+            base["follow_up_required"] = False
+            base["follow_up_reason"] = "Target 1 was hit; review whether partial profit/trailing rules should apply."
             base["exit_time"] = timestamp.strftime("%H:%M")
             base["pnl_pct"] = round(pnl_pct(side, entry, target_1), 2)
             return base
 
     base["result"] = "OPEN / NO TARGET 1"
+    base["swing_status"] = "active_swing"
+    base["follow_up_required"] = True
+    base["follow_up_reason"] = "Entry triggered but neither stop nor target was hit; treat as an active multi-day swing setup."
     base["pnl_pct"] = round(pnl_pct(side, entry, base["day_close"]), 2)
     return base
 
 
 def review_with_daily_bar(base, symbol, review_date):
-    history = yf.Ticker(symbol).history(period="1mo", auto_adjust=True)
+    try:
+        history = yf.Ticker(symbol).history(period="1mo", auto_adjust=True)
+    except Exception as exc:
+        base["data_error"] = f"No intraday or daily price data returned: {exc}"
+        return base
     if history is None or history.empty:
         base["data_error"] = "No intraday or daily price data returned."
         return base
@@ -273,6 +296,9 @@ def review_with_daily_bar(base, symbol, review_date):
     base["hit_target_1"] = target_hit(daily, base["side"], base["target_1"])
     base["hit_stop"] = stop_hit(daily, base["side"], base["stop"])
     base["result"] = classify_daily_result(base)
+    base["swing_status"] = classify_swing_status(base)
+    base["follow_up_required"] = base["swing_status"] in {"active_swing", "not_triggered", "ambiguous"}
+    base["follow_up_reason"] = swing_follow_up_reason(base)
     base["pnl_pct"] = round(
         pnl_pct(base["side"], base["entry"], base["day_close"]) if base["entered"] else 0,
         2,
@@ -301,6 +327,33 @@ def classify_daily_result(setup):
     return "OPEN / NO TARGET 1"
 
 
+def classify_swing_status(setup):
+    if not setup["entered"]:
+        return "not_triggered"
+    if setup["hit_stop"] and setup["hit_target_1"]:
+        return "ambiguous"
+    if setup["hit_stop"]:
+        return "failed_stop"
+    if setup["hit_target_1"]:
+        return "target_1_hit"
+    return "active_swing"
+
+
+def swing_follow_up_reason(setup):
+    status = setup.get("swing_status")
+    if status == "not_triggered":
+        return "Entry did not trigger today; keep on watch only if the setup remains valid."
+    if status == "ambiguous":
+        return "Daily bar touched both stop and target; needs intraday verification."
+    if status == "failed_stop":
+        return "Stop touched; review as failed setup."
+    if status == "target_1_hit":
+        return "Target 1 touched; review as successful setup or apply trailing/partial rules."
+    if status == "active_swing":
+        return "Entry triggered but neither stop nor target was hit; continue tracking over the swing window."
+    return ""
+
+
 def summarize_reviews(reviews):
     entered = [item for item in reviews if item["entered"]]
     target_hits = [item for item in reviews if item["hit_target_1"]]
@@ -318,6 +371,8 @@ def summarize_reviews(reviews):
         "target_1_hits": len(target_hits),
         "stop_hits": len(stops),
         "no_entries": len(no_entries),
+        "active_swings": sum(1 for item in reviews if item.get("swing_status") == "active_swing"),
+        "follow_up_required": sum(1 for item in reviews if item.get("follow_up_required")),
         "avg_entered_pnl_pct": round(sum(pnl_values) / len(pnl_values), 2) if pnl_values else 0,
         "dominant_result": max(result_counts, key=result_counts.get) if result_counts else "n/a",
         "result_counts": result_counts,
@@ -332,7 +387,11 @@ def build_self_review_lessons(reviews):
         return ["No setups were available for review."]
     if summary["target_1_hits"] == 0 and summary["entries_triggered"] > 0:
         lessons.append(
-            "Target 1 was not reached by any entered setup; treat these as multi-day swing setups unless intraday targets are explicitly generated."
+            "No entered setup reached Target 1 today. This is not a failure by itself because the intended horizon is multi-day swing trading."
+        )
+    if summary["active_swings"] > 0:
+        lessons.append(
+            f"{summary['active_swings']} setup(s) remain active swings; track them across the week before judging target/stop quality."
         )
     if summary["no_entries"] >= summary["setups_reviewed"] / 2:
         lessons.append(
@@ -348,10 +407,45 @@ def build_self_review_lessons(reviews):
         )
     elif summary["entries_triggered"] > 0:
         lessons.append(
-            "Entered setups were negative on average by the close; require stronger confirmation or smaller initial size in similar regimes."
+            "Entered setups were negative on average by the close; flag this as day-1 behavior, not a completed trade result."
         )
 
     return lessons or ["No strong lesson detected yet; continue collecting daily outcome samples."]
+
+
+def build_market_context(reviews):
+    entered = [item for item in reviews if item.get("entered")]
+    avg_mfe = average([item.get("max_favorable_move_pct") for item in entered])
+    avg_mae = average([item.get("max_adverse_move_pct") for item in entered])
+    return {
+        "purpose": "Pattern recognition only, not FOMO.",
+        "entered_count": len(entered),
+        "average_max_favorable_move_pct": avg_mfe,
+        "average_max_adverse_move_pct": avg_mae,
+        "interpretation": (
+            "Use this section to identify whether the market rewarded immediate entries, punished chase entries, "
+            "or simply needs more time for multi-day setups."
+        ),
+    }
+
+
+def build_missed_context_scan(reviews):
+    notable = []
+    for item in reviews:
+        if item.get("entered") and item.get("max_adverse_move_pct") is not None and item["max_adverse_move_pct"] <= -2:
+            notable.append(f"{item['symbol']} had adverse movement worse than -2% after entry; check news/sector context.")
+        if item.get("entered") and item.get("max_favorable_move_pct") is not None and item["max_favorable_move_pct"] >= 2:
+            notable.append(f"{item['symbol']} moved favorably more than 2% intraday; check whether target/entry rules captured the pattern.")
+
+    return {
+        "purpose": "Find repeated misses or blind spots without chasing what already moved.",
+        "items": notable[:10],
+        "questions_for_committee": [
+            "Did any setup move because of news or sector rotation we did not capture in the morning brief?",
+            "Were entries too easy, too strict, or properly filtered?",
+            "Were stop/target distances consistent with recent volatility and the intended swing horizon?",
+        ],
+    }
 
 
 def format_daily_setup_review(report):
@@ -362,6 +456,8 @@ def format_daily_setup_review(report):
         f"Created At: {report['created_at']}",
         f"Review Date: {report['review_date']}",
         f"Morning Brief: {report.get('source_morning_brief_created_at', 'n/a')}",
+        f"Review Mode: {report.get('review_mode', 'n/a')}",
+        f"Intended Horizon: {report.get('intended_horizon', 'n/a')}",
         "",
         "## Outcome Summary",
         f"- Setups Reviewed: {summary['setups_reviewed']}",
@@ -369,12 +465,14 @@ def format_daily_setup_review(report):
         f"- Target 1 Hits: {summary['target_1_hits']}",
         f"- Stop Hits: {summary['stop_hits']}",
         f"- No Entries: {summary['no_entries']}",
+        f"- Active Multi-Day Swings: {summary.get('active_swings', 0)}",
+        f"- Follow-Up Required: {summary.get('follow_up_required', 0)}",
         f"- Average Entered P&L: {summary['avg_entered_pnl_pct']:.2f}%",
         f"- Dominant Result: {summary['dominant_result']}",
         "",
         "## Setup Results",
-        "| Rank | Symbol | Decision | Entry | Stop | Target 1 | Day High | Day Low | Close | Result | P&L From Entry |",
-        "|---:|---|---|---:|---:|---:|---:|---:|---:|---|---:|",
+        "| Rank | Symbol | Decision | Entry | Stop | Target 1 | Day High | Day Low | Close | Swing Status | Result | P&L From Entry | Follow-Up |",
+        "|---:|---|---|---:|---:|---:|---:|---:|---:|---|---|---:|---|",
     ]
 
     for index, setup in enumerate(report["reviewed_setups"], start=1):
@@ -382,8 +480,26 @@ def format_daily_setup_review(report):
             f"| {index} | {setup['display_symbol']} | {setup.get('decision', '')} | "
             f"{fmt(setup.get('entry'))} | {fmt(setup.get('stop'))} | {fmt(setup.get('target_1'))} | "
             f"{fmt(setup.get('day_high'))} | {fmt(setup.get('day_low'))} | {fmt(setup.get('day_close'))} | "
-            f"{setup['result']} | {fmt_pct(setup.get('pnl_pct'))} |"
+            f"{setup.get('swing_status', 'n/a')} | {setup['result']} | {fmt_pct(setup.get('pnl_pct'))} | "
+            f"{'yes' if setup.get('follow_up_required') else 'no'} |"
         )
+
+    market_context = report.get("market_context") or {}
+    missed_scan = report.get("missed_context_scan") or {}
+    lines.extend([
+        "",
+        "## Market / News Pattern Scan",
+        f"- Purpose: {market_context.get('purpose', 'Pattern recognition only, not FOMO.')}",
+        f"- Average Max Favorable Move: {fmt_pct(market_context.get('average_max_favorable_move_pct'))}",
+        f"- Average Max Adverse Move: {fmt_pct(market_context.get('average_max_adverse_move_pct'))}",
+        f"- Interpretation: {market_context.get('interpretation', 'n/a')}",
+        "",
+        "## What We May Have Missed",
+    ])
+    lines.extend([f"- {item}" for item in missed_scan.get("items", [])] or ["- No large missed move flagged by the starter scan."])
+    lines.append("")
+    lines.append("## Questions For The Committee")
+    lines.extend([f"- {item}" for item in missed_scan.get("questions_for_committee", [])])
 
     lines.extend(["", "## Agent Self-Review Lessons"])
     lines.extend([f"- {lesson}" for lesson in report["self_review_lessons"]])
@@ -492,3 +608,10 @@ def fmt_pct(value):
     if value is None:
         return "n/a"
     return f"{float(value):.2f}%"
+
+
+def average(values):
+    clean = [float(value) for value in values if value is not None]
+    if not clean:
+        return None
+    return round(sum(clean) / len(clean), 2)

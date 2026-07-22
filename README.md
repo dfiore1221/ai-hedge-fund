@@ -19,6 +19,7 @@ python3 main.py ledger summary
 python3 main.py ticker status
 python3 main.py feedback summary
 python3 main.py review today
+python3 main.py weekly-review today
 python3 main.py security check
 python3 main.py data-health today
 python3 main.py project status
@@ -112,9 +113,19 @@ The `review today` command:
 
 1. Loads the saved morning brief JSON snapshot from `reports/morning_brief/`.
 2. Replays the top recommendations against that day's intraday market action.
-3. Checks whether each idea triggered entry, hit Target 1, hit stop, or stayed open without reaching Target 1.
-4. Saves a daily self-review report in `reports/setup_review/`.
-5. Writes setup outcomes into local memory so future feedback can compare morning recommendations against what actually happened.
+3. Treats the default target/stop plan as a multi-day swing setup, not a same-day pass/fail test.
+4. Checks whether each idea triggered entry, hit Target 1, hit stop, or remains an active swing requiring follow-up.
+5. Adds a market/news pattern scan to identify blind spots without encouraging FOMO.
+6. Saves a daily self-review report in `reports/setup_review/`.
+7. Writes setup outcomes into local memory so future feedback can compare morning recommendations against what actually happened.
+
+The `weekly-review today` command:
+
+1. Aggregates the week of daily setup reviews.
+2. Reviews which predictions were accurate, which were way off, and which stops or targets were hit.
+3. Summarizes open/planned and closed simulated trades.
+4. Builds a target/stop table by symbol.
+5. Saves a Friday-style accountability review in `reports/weekly_review/`.
 
 To schedule the setup self-review for 4:20 PM on macOS:
 
@@ -128,6 +139,17 @@ launchctl load ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.daily-setup-revie
 ```
 
 Logs are written to `reports/setup_review/automation.log`, `launchd.out.log`, and `launchd.err.log`.
+
+To schedule the weekly review for Fridays at 4:35 PM on macOS:
+
+```bash
+cd "/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund"
+chmod +x scripts/run_weekly_review.sh
+mkdir -p ~/Library/LaunchAgents
+cp automation/com.dfiore.ai-hedge-fund.weekly-review.plist ~/Library/LaunchAgents/
+launchctl unload ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.weekly-review.plist 2>/dev/null || true
+launchctl load ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.weekly-review.plist
+```
 
 The `security check` command:
 

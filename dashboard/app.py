@@ -14,6 +14,11 @@ from dotenv import load_dotenv
 
 from agents.feedback_loop import generate_feedback_report
 from agents.committee_question import ask_committee
+from agents.weekly_review import (
+    format_weekly_review,
+    generate_weekly_review,
+    save_weekly_review_report,
+)
 from agents.daily_setup_review import (
     format_daily_setup_review,
     generate_daily_setup_review,
@@ -597,6 +602,16 @@ def render_feedback_loop():
                 output_path = save_daily_setup_review_report(setup_review)
                 st.success(f"Daily setup review saved: {output_path}")
                 st.code(format_daily_setup_review(setup_review), language="markdown")
+            except Exception as exc:
+                st.error(redact_text(str(exc)))
+
+    if st.button("Run Weekly Review"):
+        with st.spinner("Reviewing the week across setup accuracy, stops, targets, and paper trades..."):
+            try:
+                weekly = generate_weekly_review()
+                output_path = save_weekly_review_report(weekly)
+                st.success(f"Weekly review saved: {output_path}")
+                st.code(format_weekly_review(weekly), language="markdown")
             except Exception as exc:
                 st.error(redact_text(str(exc)))
 

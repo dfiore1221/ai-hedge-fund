@@ -343,6 +343,25 @@ def review(action):
     print(f"Saved daily setup review to: {output_path}")
 
 
+def weekly_review(action):
+    try:
+        from agents.weekly_review import (
+            format_weekly_review,
+            generate_weekly_review,
+            save_weekly_review_report,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    review_day = action.lower() if action.lower() in {"today", "week"} else action
+    report = generate_weekly_review(review_day)
+    output_path = save_weekly_review_report(report)
+    print(format_weekly_review(report))
+    print(f"Saved weekly review to: {output_path}")
+
+
 def security(action):
     if action.lower() != "check":
         raise ValueError("Security command currently supports: check")
@@ -634,6 +653,7 @@ def main():
         print("  python3 main.py fills apply")
         print("  python3 main.py feedback summary")
         print("  python3 main.py review today")
+        print("  python3 main.py weekly-review today")
         print("  python3 main.py security check")
         print("  python3 main.py data-health today")
         print("  python3 main.py project status")
@@ -686,6 +706,8 @@ def main():
             feedback(ticker)
         elif command == "review":
             review(ticker)
+        elif command == "weekly-review":
+            weekly_review(ticker)
         elif command == "security":
             security(ticker)
         elif command == "data-health":
