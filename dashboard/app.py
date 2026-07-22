@@ -5,7 +5,9 @@ import re
 import sqlite3
 import subprocess
 import sys
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -164,6 +166,10 @@ def render_core_rebalance_approval(brief_report):
 
     status = core_sleeve.get("status", "n/a")
     approval_id = build_core_rebalance_approval_id((brief_report or {}).get("created_at"))
+    preview = build_core_rebalance_preview(core_sleeve)
+    if core_rebalance_approval_complete(approval_id, preview):
+        return
+
     with st.expander("Approve Core ETF Sleeve Rebalance", expanded=status == "Rebalance needed."):
         st.caption("Paper-only workflow. This records simulated ETF lots in the local ledger; it does not send broker orders.")
 
@@ -173,18 +179,28 @@ def render_core_rebalance_approval(brief_report):
         c3.metric("Current Sleeve", money(core_sleeve.get("current_sleeve_value", 0)))
         c4.metric("Drift", money(core_sleeve.get("drift_value", 0)))
 
-        preview = build_core_rebalance_preview(core_sleeve)
         if preview:
             st.dataframe(pd.DataFrame(preview), hide_index=True, width="stretch")
         else:
             st.info("No core sleeve rebalance actions are available from the latest brief.")
 
+        market_session = regular_market_session_status()
+        if market_session["is_open"]:
+            st.success(f"Market session open: {market_session['label']}")
+        else:
+            st.warning(f"Rebalance approval is unavailable: {market_session['label']}")
+
         st.caption(f"Approval ID: {approval_id}")
         confirmed = st.checkbox(
             "I approve AIFundOS to record these core ETF rebalance buys in the simulated paper ledger.",
             key=f"confirm_{approval_id}",
+            disabled=not market_session["is_open"],
         )
-        disabled = not confirmed or not any(item["action"] == "buy" for item in preview)
+        disabled = (
+            not market_session["is_open"]
+            or not confirmed
+            or not any(item["action"] == "buy" for item in preview)
+        )
         if st.button("Approve Core Rebalance Paper Orders", disabled=disabled, type="primary"):
             result = approve_core_rebalance_from_brief(brief_report)
             if result["created"]:
@@ -226,6 +242,107 @@ def build_core_rebalance_preview(core_sleeve):
             "reason": reason,
         })
     return rows
+
+
+def core_rebalance_approval_complete(approval_id, preview):
+    buy_symbols = {item["symbol"] for item in preview if item.get("action") == "buy"}
+    if not buy_symbols:
+        return False
+
+    journal = load_trade_journal()
+    if journal.empty or "agent_run_id" not in journal.columns:
+        return False
+
+    created_symbols = {
+        str(row.get("symbol", "")).upper().strip()
+        for _, row in journal.iterrows()
+        if str(row.get("agent_run_id", "")).strip() == approval_id
+    }
+    return buy_symbols.issubset(created_symbols)
+
+
+def regular_market_session_status(now=None):
+    eastern = ZoneInfo("America/New_York")
+    now = now.astimezone(eastern) if now else datetime.now(eastern)
+    today = now.date()
+
+    if now.weekday() >= 5:
+        return market_session_result(False, now, "Market closed for the weekend.")
+    if today in nyse_holidays(today.year):
+        return market_session_result(False, now, "Market closed for a major NYSE holiday.")
+
+    market_open = time(9, 30)
+    market_close = time(16, 0)
+    current = now.time()
+    if current < market_open:
+        return market_session_result(False, now, "Market has not opened yet. Regular hours are 9:30 AM-4:00 PM ET.")
+    if current >= market_close:
+        return market_session_result(False, now, "Market is closed. Regular hours are 9:30 AM-4:00 PM ET.")
+    return market_session_result(True, now, "Regular U.S. market hours are active.")
+
+
+def market_session_result(is_open, now, reason):
+    return {
+        "is_open": is_open,
+        "now": now.isoformat(timespec="seconds"),
+        "label": f"{reason} Current ET time: {now.strftime('%Y-%m-%d %I:%M %p')}.",
+    }
+
+
+def nyse_holidays(year):
+    return {
+        observed(date(year, 1, 1)),
+        nth_weekday(year, 1, 0, 3),
+        nth_weekday(year, 2, 0, 3),
+        easter_date(year) - timedelta(days=2),
+        last_weekday(year, 5, 0),
+        observed(date(year, 6, 19)),
+        observed(date(year, 7, 4)),
+        nth_weekday(year, 9, 0, 1),
+        nth_weekday(year, 11, 3, 4),
+        observed(date(year, 12, 25)),
+    }
+
+
+def observed(day):
+    if day.weekday() == 5:
+        return day - timedelta(days=1)
+    if day.weekday() == 6:
+        return day + timedelta(days=1)
+    return day
+
+
+def nth_weekday(year, month, weekday, n):
+    day = date(year, month, 1)
+    while day.weekday() != weekday:
+        day += timedelta(days=1)
+    return day + timedelta(days=7 * (n - 1))
+
+
+def last_weekday(year, month, weekday):
+    next_month = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+    day = next_month - timedelta(days=1)
+    while day.weekday() != weekday:
+        day -= timedelta(days=1)
+    return day
+
+
+def easter_date(year):
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return date(year, month, day)
 
 
 def render_data_quality():
