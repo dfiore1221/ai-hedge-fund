@@ -383,3 +383,14 @@ See `docs/data_quality_systems_research.md` for the current data-provider resear
 - [ ] Add options data provider. Interim enhanced starter layer uses Yahoo/yfinance chains for watch-only put/call, IV, liquidity, and unusual-activity clues.
 - [x] Add local data cache. Stores successful provider JSON responses under ignored `data_cache/` with short TTLs and stale fallback where appropriate.
 - [ ] Add provider comparison checks.
+
+## Professional Portfolio To-Do List
+
+- [ ] Formalize and enforce core ETF sleeve rebalance rules, including rebalance bands, cadence, drift thresholds, and action recommendations.
+- [ ] Add portfolio-level stop, hedge, and drawdown rules for ETF/core sleeve positions.
+- [ ] Build a full exposure map covering sector, factor, beta, liquidity, and correlation risk.
+- [ ] Add professional attribution: what made or lost money, by position, sleeve, sector, setup type, and agent recommendation.
+- [ ] Model dividends, taxes, commissions, slippage, bid/ask spread, borrow costs, and execution assumptions.
+- [ ] Keep improving data quality toward institutional-grade reliability with stronger provider agreement checks and source conflict handling.
+- [ ] Prove whether the system has edge through enough paper-trade history before loosening trade gates.
+- [ ] Observe newly built alerts and automations during live market hours, then tune thresholds to reduce missed events and noise.
