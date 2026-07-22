@@ -650,6 +650,32 @@ def position_manager(period):
     print(f"Saved position manager report to: {output_path}")
 
 
+def intraday_monitor(period):
+    try:
+        from agents.intraday_monitor import (
+            format_intraday_monitor_report,
+            run_intraday_monitor,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    if str(period).lower() not in {"now", "today"}:
+        raise ValueError("Intraday monitor currently supports: now")
+
+    dry_run = "--dry-run" in sys.argv[3:]
+    no_email = "--no-email" in sys.argv[3:]
+    apply_fills = "--apply-fills" in sys.argv[3:]
+    report = run_intraday_monitor(
+        send_alert=not no_email,
+        dry_run=dry_run,
+        apply_fills=apply_fills,
+    )
+    print(format_intraday_monitor_report(report))
+    print(f"Saved intraday monitor report to: {report['report_path']}")
+
+
 def main():
     if len(sys.argv) < 3:
         print("Usage:")
@@ -678,6 +704,8 @@ def main():
         print("  python3 main.py weekly-review today")
         print("  python3 main.py position-manager today")
         print("  python3 main.py position-manager today --llm")
+        print("  python3 main.py intraday-monitor now")
+        print("  python3 main.py intraday-monitor now --dry-run")
         print("  python3 main.py security check")
         print("  python3 main.py data-health today")
         print("  python3 main.py project status")
@@ -734,6 +762,8 @@ def main():
             weekly_review(ticker)
         elif command == "position-manager":
             position_manager(ticker)
+        elif command == "intraday-monitor":
+            intraday_monitor(ticker)
         elif command == "security":
             security(ticker)
         elif command == "data-health":

@@ -22,6 +22,8 @@ python3 main.py review today
 python3 main.py weekly-review today
 python3 main.py position-manager today
 python3 main.py position-manager today --llm
+python3 main.py intraday-monitor now
+python3 main.py intraday-monitor now --dry-run
 python3 main.py security check
 python3 main.py data-health today
 python3 main.py project status
@@ -138,6 +140,29 @@ The `position-manager today` command:
 5. Produces a daily portfolio action list: exit, take profit, reassess, review levels, hold, or keep planned.
 6. Writes the Position Manager output to local memory so the Committee can learn from prior supervision.
 7. Uses a deterministic CIO summary by default; add `--llm` to request an OpenAI-generated plain-English CIO summary.
+
+The `intraday-monitor now` command:
+
+1. Runs during market hours as the Position Manager's alert layer.
+2. Checks planned paper entries, open-paper stop/target exits, current Position Manager actions, market stress, and fresh news catalysts for active open/planned symbols.
+3. Sends an email only when new actionable alerts appear, such as stop/target events, major market stress, or relevant positive/negative catalysts.
+4. Dedupes alerts by day so the same event should not repeatedly email you.
+5. Saves the monitor report in `reports/intraday_monitor/` and writes a compact summary to memory.
+6. Supports `--dry-run` to validate email behavior without sending.
+7. Supports `--apply-fills` for the automated paper-order path.
+
+To schedule the intraday monitor every 15 minutes during market hours on macOS:
+
+```bash
+cd "/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund"
+chmod +x scripts/run_intraday_monitor.sh
+mkdir -p ~/Library/LaunchAgents
+cp automation/com.dfiore.ai-hedge-fund.intraday-monitor.plist ~/Library/LaunchAgents/
+launchctl unload ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.intraday-monitor.plist 2>/dev/null || true
+launchctl load ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.intraday-monitor.plist
+```
+
+Logs are written to `reports/intraday_monitor/automation.log`, `launchd.out.log`, and `launchd.err.log`.
 
 To schedule the setup self-review for 4:20 PM on macOS:
 

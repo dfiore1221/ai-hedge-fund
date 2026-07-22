@@ -24,6 +24,7 @@ reports/paper_fills/
 reports/setup_review/
 reports/weekly_review/
 reports/position_manager/
+reports/intraday_monitor/
 reports/*.log
 data_cache/
 portfolio/holdings.json

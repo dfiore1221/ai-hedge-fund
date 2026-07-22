@@ -29,6 +29,10 @@ from agents.position_manager import (
     generate_position_manager_report,
     save_position_manager_report,
 )
+from agents.intraday_monitor import (
+    format_intraday_monitor_report,
+    run_intraday_monitor,
+)
 from data.data_quality import generate_data_health_report
 from data.paper_ledger import build_paper_ledger
 from data.paper_fills import format_paper_fill_report, process_paper_fills
@@ -582,11 +586,16 @@ def render_position_manager():
     st.subheader("Position Manager")
     st.caption("Daily paper-trade supervision: active positions, planned orders, stops, targets, and time-stop review.")
 
-    col1, col2 = st.columns([1, 4])
+    col1, col2, col3 = st.columns([1, 1, 3])
     use_llm = col2.checkbox(
         "Use OpenAI CIO summary for this run",
         value=False,
         help="Optional. The deterministic summary still runs if the API call is unavailable.",
+    )
+    dry_run_alert = col3.checkbox(
+        "Dry-run intraday email",
+        value=True,
+        help="Preview intraday alert email behavior without sending.",
     )
 
     if col1.button("Run Position Manager", type="primary"):
@@ -596,6 +605,22 @@ def render_position_manager():
                 output_path = save_position_manager_report(report)
                 st.success(f"Position manager report saved: {output_path}")
                 st.code(format_position_manager_report(report), language="markdown")
+            except Exception as exc:
+                st.error(redact_text(str(exc)))
+
+    if st.button("Run Intraday Alert Monitor"):
+        with st.spinner("Scanning positions, fill triggers, market stress, and news catalysts..."):
+            try:
+                report = run_intraday_monitor(
+                    send_alert=True,
+                    dry_run=dry_run_alert,
+                    apply_fills=False,
+                )
+                if report.get("new_alerts"):
+                    st.warning(f"{len(report['new_alerts'])} new alert(s) found.")
+                else:
+                    st.success("No new intraday alerts.")
+                st.code(format_intraday_monitor_report(report), language="markdown")
             except Exception as exc:
                 st.error(redact_text(str(exc)))
 
