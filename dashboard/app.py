@@ -39,7 +39,20 @@ from agents.intraday_monitor import (
     format_intraday_monitor_report,
     run_intraday_monitor,
 )
+from agents.options_readiness import (
+    format_options_readiness_report,
+    generate_options_readiness_report,
+    save_options_readiness_report,
+)
 from data.data_quality import generate_data_health_report
+from data.options_journal import (
+    append_option_trade,
+    close_option_trade,
+    enrich_options_metrics,
+    load_options_journal,
+    save_options_journal,
+    summarize_options_journal,
+)
 from data.paper_ledger import build_paper_ledger
 from data.paper_fills import format_paper_fill_report, process_paper_fills
 from data.trade_journal import (
@@ -90,6 +103,7 @@ def main():
         "Watchlist",
         "Simulated Trades",
         "Position Manager",
+        "Options Readiness",
         "Feedback Loop",
         "Ask Committee",
         "Agent Debate",
@@ -110,14 +124,16 @@ def main():
     with tabs[5]:
         render_position_manager()
     with tabs[6]:
-        render_feedback_loop()
+        render_options_readiness()
     with tabs[7]:
-        render_ask_committee()
+        render_feedback_loop()
     with tabs[8]:
-        render_agent_debate()
+        render_ask_committee()
     with tabs[9]:
-        render_research_memory()
+        render_agent_debate()
     with tabs[10]:
+        render_research_memory()
+    with tabs[11]:
         render_settings()
 
 
@@ -775,6 +791,156 @@ def render_trade_journal():
     if st.button("Save Journal Edits"):
         save_trade_journal(edited)
         st.success("Trade journal saved.")
+
+
+def render_options_readiness():
+    st.subheader("Options Readiness")
+    st.caption("Practice framework for defined-risk paper options. This does not place real trades.")
+
+    controls = st.columns([1, 1, 2])
+    symbol = controls[0].text_input("Optional Symbol", value="").upper().strip()
+    include_snapshot = controls[1].checkbox("Check starter options snapshot", value=False)
+    run_report = controls[2].button("Refresh Options Readiness", type="primary")
+
+    if run_report or "options_readiness_report" not in st.session_state:
+        with st.spinner("Building options readiness report..."):
+            report = generate_options_readiness_report(
+                symbol=symbol or None,
+                include_live_options=include_snapshot and bool(symbol),
+            )
+            save_options_readiness_report(report)
+            st.session_state["options_readiness_report"] = report
+
+    report = st.session_state["options_readiness_report"]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Status", report.get("status", "n/a"))
+    c2.metric("Readiness Score", f"{report.get('readiness_score', 0):.1f}/100")
+    c3.metric("Scope", report.get("symbol", "PORTFOLIO"))
+
+    left, right = st.columns([1, 1])
+    with left:
+        st.markdown("#### Provider Status")
+        provider_rows = [
+            {
+                "provider": name,
+                "configured": provider.get("configured"),
+                "role": provider.get("role"),
+            }
+            for name, provider in report.get("provider_status", {}).items()
+        ]
+        st.dataframe(pd.DataFrame(provider_rows), hide_index=True, width="stretch")
+
+        st.markdown("#### Readiness Checks")
+        st.dataframe(pd.DataFrame(report.get("checks", [])), hide_index=True, width="stretch")
+
+    with right:
+        st.markdown("#### Beginner Strategy Menu")
+        strategy_rows = [
+            {
+                "strategy": item.get("strategy"),
+                "direction": item.get("direction"),
+                "max_loss": item.get("max_loss"),
+            }
+            for item in report.get("strategy_menu", [])
+        ]
+        st.dataframe(pd.DataFrame(strategy_rows), hide_index=True, width="stretch")
+
+        st.markdown("#### Education Terms")
+        terms = report.get("education_terms", {})
+        selected_term = st.selectbox("Term", list(terms.keys()) if terms else ["n/a"])
+        st.info(terms.get(selected_term, "No definition available."))
+
+    st.markdown("#### Paper Options Journal")
+    journal = enrich_options_metrics(load_options_journal())
+    summary = summarize_options_journal(journal)
+    j1, j2, j3, j4 = st.columns(4)
+    j1.metric("Planned/Open", summary["planned_or_open"])
+    j2.metric("Closed", summary["closed"])
+    j3.metric("Premium At Risk", money(summary["open_premium_at_risk"]))
+    j4.metric("Realized P&L", money(summary["total_realized_pnl"]))
+
+    with st.expander("Add Paper Options Idea", expanded=False):
+        with st.form("add_options_trade"):
+            col1, col2, col3, col4 = st.columns(4)
+            opt_symbol = col1.text_input("Symbol", key="option_symbol").upper().strip()
+            strategy = col2.selectbox(
+                "Strategy",
+                ["long_call", "long_put", "call_debit_spread", "put_debit_spread"],
+            )
+            status = col3.selectbox("Status", ["planned", "open"], key="option_status")
+            source = col4.selectbox("Source", ["manual", "morning brief", "CIO", "education"])
+
+            col5, col6, col7, col8 = st.columns(4)
+            expiration = col5.text_input("Expiration", placeholder="YYYY-MM-DD")
+            strike = col6.number_input("Strike", min_value=0.0, value=0.0)
+            entry_premium = col7.number_input("Entry Premium", min_value=0.0, value=0.0)
+            contracts = col8.number_input("Contracts", min_value=0, value=1)
+
+            col9, col10 = st.columns(2)
+            target_premium = col9.number_input("Target Premium", min_value=0.0, value=0.0)
+            stop_premium = col10.number_input("Stop Premium", min_value=0.0, value=0.0)
+
+            thesis = st.text_area("Thesis / Why", key="option_thesis")
+            notes = st.text_area("Notes", key="option_notes")
+            submitted = st.form_submit_button("Save Paper Options Idea")
+
+        if submitted:
+            if not opt_symbol:
+                st.error("Symbol is required.")
+            elif not expiration:
+                st.error("Expiration is required.")
+            elif strike <= 0 or entry_premium <= 0 or contracts <= 0:
+                st.error("Strike, entry premium, and contracts must be greater than zero.")
+            else:
+                trade_id = append_option_trade({
+                    "symbol": opt_symbol,
+                    "strategy": strategy,
+                    "status": status,
+                    "source": source,
+                    "expiration": expiration,
+                    "strike": strike,
+                    "entry_premium": entry_premium,
+                    "contracts": contracts,
+                    "target_premium": target_premium if target_premium else "",
+                    "stop_premium": stop_premium if stop_premium else "",
+                    "thesis": thesis,
+                    "notes": notes,
+                })
+                st.success(f"Saved paper options idea: {trade_id}")
+                st.rerun()
+
+    open_options = journal[journal["status"].isin(["planned", "open"])] if not journal.empty else journal
+    if not open_options.empty:
+        with st.expander("Close Paper Options Idea", expanded=False):
+            labels = {
+                f"{row['id']} | {row['symbol']} | {row['strategy']} | premium {row['entry_premium']}": row["id"]
+                for _, row in open_options.iterrows()
+            }
+            with st.form("close_options_trade"):
+                selected = st.selectbox("Options Idea", list(labels.keys()))
+                exit_premium = st.number_input("Exit Premium", min_value=0.0, value=0.0)
+                reason = st.text_area("Exit Reason", key="option_exit_reason")
+                lessons = st.text_area("Lesson", key="option_lessons")
+                close_submitted = st.form_submit_button("Close Paper Options Idea")
+            if close_submitted:
+                if exit_premium <= 0:
+                    st.error("Exit premium is required.")
+                else:
+                    close_option_trade(labels[selected], exit_premium, reason, lessons)
+                    st.success("Paper options idea closed.")
+                    st.rerun()
+
+    if journal.empty:
+        st.info("No paper-options ideas recorded yet.")
+    else:
+        st.dataframe(journal, hide_index=True, width="stretch")
+        edited = st.data_editor(journal, hide_index=True, width="stretch", num_rows="dynamic")
+        if st.button("Save Options Journal Edits"):
+            save_options_journal(edited)
+            st.success("Options journal saved.")
+
+    with st.expander("Full Options Readiness Report", expanded=False):
+        st.code(format_options_readiness_report(report), language="markdown")
 
 
 def render_position_manager():

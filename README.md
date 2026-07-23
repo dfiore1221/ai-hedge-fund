@@ -42,6 +42,10 @@ python3 main.py data-health today
 python3 main.py project status
 python3 main.py technical MSFT
 python3 main.py options MSFT
+python3 main.py options-ready status
+python3 main.py options-ready status --symbol MSFT
+python3 main.py options-ready summary
+python3 main.py options-ready open MSFT long_call 2026-09-18 400 12.50 1 --status planned
 python3 main.py news MSFT
 python3 main.py backtest MSFT
 python3 main.py risk MSFT
@@ -57,7 +61,7 @@ python3 main.py facts MSFT
 The `dashboard start` command:
 
 1. Starts a local Streamlit dashboard at `http://localhost:8501`, or the port set in `DASHBOARD_PORT`.
-2. Shows the latest morning brief, watchlist categories, simulated trade journal, agent debate logs, and research memory.
+2. Shows the latest morning brief, watchlist categories, simulated trade journal, options readiness, agent debate logs, and research memory.
 3. Shows a Data Quality tab with provider status, data-quality score, live price sample coverage, blockers, and recommended provider fixes.
 4. Stores simulated trade journal entries locally in `portfolio/trade_journal.csv`.
 5. Tracks planned/open/closed simulated trades, setup type, source, entry, stop, target, shares, planned risk, live price refresh, unrealized P&L, realized P&L, R-multiple, outcome, exit reason, and lessons learned.
@@ -176,6 +180,24 @@ launchctl load ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.intraday-monitor.
 ```
 
 Logs are written to `reports/intraday_monitor/automation.log`, `launchd.out.log`, and `launchd.err.log`.
+
+The `options-ready` command:
+
+1. Builds the options-readiness report from `framework/options_readiness.json`.
+2. Tracks defined-risk paper-options ideas in ignored `portfolio/options_journal.csv`.
+3. Supports beginner strategies only: long calls, long puts, call debit spreads, and put debit spreads.
+4. Blocks the current framework from treating starter Yahoo options data as execution-grade.
+5. Prepares AIFundOS for a future Intrinio, Tradier, or ORATS integration without starting a paid trial yet.
+
+Useful commands:
+
+```bash
+python3 main.py options-ready status
+python3 main.py options-ready status --symbol MSFT
+python3 main.py options-ready summary
+python3 main.py options-ready open MSFT long_call 2026-09-18 400 12.50 1 --status planned
+python3 main.py options-ready close OPTIONS_TRADE_ID 18.00 --reason target
+```
 
 To schedule the setup self-review for 4:20 PM on macOS:
 
@@ -413,7 +435,8 @@ See `docs/data_quality_systems_research.md` for the current data-provider resear
 - [x] Add economic calendar integration. Uses `TRADING_ECONOMICS_API_KEY` when available, otherwise uses the free FRED release calendar through `FRED_API_KEY`.
 - [x] Add premium news / analyst feed. Uses Benzinga market-moving news and analyst ratings when `BENZINGA_API_KEY` is configured, Finnhub company news and recommendation trends when `FINNHUB_API_KEY` is configured, and Yahoo starter headlines/actions as fallback.
 - [x] Add better market data provider. Uses Tiingo latest equity prices when `TIINGO_API_KEY` is configured, or Alpaca latest stock bars when Alpaca keys are configured, with Yahoo as fallback.
-- [ ] Add options data provider. Interim enhanced starter layer uses Yahoo/yfinance chains for watch-only put/call, IV, liquidity, and unusual-activity clues.
+- [x] Add options-readiness framework. Defines beginner strategies, risk limits, education terms, paper-options journal, and provider trial plan.
+- [ ] Add options data provider. Interim enhanced starter layer uses Yahoo/yfinance chains for watch-only put/call, IV, liquidity, and unusual-activity clues. Intrinio is the planned first trial candidate when ready.
 - [x] Add local data cache. Stores successful provider JSON responses under ignored `data_cache/` with short TTLs and stale fallback where appropriate.
 - [ ] Add provider comparison checks.
 

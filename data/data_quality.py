@@ -95,6 +95,13 @@ PROVIDER_CONFIGS = [
         "note": "Broad practical API for news/earnings/estimates.",
     },
     {
+        "name": "Intrinio",
+        "domain": "options chains, greeks, implied volatility, historical options prices",
+        "env_key": "INTRINIO_API_KEY",
+        "status_when_missing": "not_configured",
+        "note": "Planned first trial candidate for affordable options data.",
+    },
+    {
         "name": "Tradier",
         "domain": "options chains, greeks, brokerage/paper trading workflow",
         "env_key": "TRADIER_ACCESS_TOKEN",
@@ -500,7 +507,7 @@ def score_domains(
         economic_calendar_ok
         or bool({"Finnhub", "Benzinga"} & configured_names)
     )
-    options_provider_configured = bool({"Tradier", "ORATS"} & configured_names)
+    options_provider_configured = bool({"Intrinio", "Tradier", "ORATS"} & configured_names)
     fred_ok = bool(fred_snapshot and fred_snapshot.get("status") in {"ok", "partial"})
     macro_provider_configured = fred_ok or economic_calendar_ok
     sec_configured = provider_names["SEC EDGAR"]["configured"]
@@ -784,8 +791,8 @@ def build_recommendations(providers, domain_scores):
         recommendations.append("Trading Economics remains optional for premium forecasts, actuals, and global impact scoring.")
     if not {"Benzinga", "Finnhub"} & configured_names:
         recommendations.append("Add Benzinga or Finnhub for overnight news, earnings, and analyst actions.")
-    if not {"Tradier", "ORATS"} & configured_names:
-        recommendations.append("Keep options ideas watch-only until Tradier, ORATS, Polygon, or another options source is connected.")
+    if not {"Intrinio", "Tradier", "ORATS"} & configured_names:
+        recommendations.append("Keep options ideas watch-only until Intrinio, Tradier, ORATS, Polygon, or another options source is connected.")
 
     return recommendations
 

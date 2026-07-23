@@ -16,6 +16,7 @@ reports/conflicts/
 reports/devils_advocate/
 reports/morning_brief/
 reports/options/
+reports/options_readiness/
 reports/news/
 reports/backtests/
 reports/feedback/
@@ -30,3 +31,4 @@ reports/*.log
 data_cache/
 portfolio/holdings.json
 portfolio/trade_journal.csv
+portfolio/options_journal.csv

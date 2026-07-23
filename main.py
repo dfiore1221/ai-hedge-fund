@@ -579,6 +579,92 @@ def options(ticker):
     print(f"Saved options report to: {output_path}")
 
 
+def options_ready(action):
+    try:
+        from agents.options_readiness import (
+            format_options_readiness_report,
+            generate_options_readiness_report,
+            save_options_readiness_report,
+        )
+        from data.options_journal import (
+            append_option_trade,
+            close_option_trade,
+            format_options_journal_summary,
+            load_options_journal,
+            summarize_options_journal,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    action = str(action or "").lower().strip()
+    if action == "status":
+        symbol = get_cli_option("--symbol", "")
+        report = generate_options_readiness_report(
+            symbol=symbol or None,
+            include_live_options=bool(symbol),
+        )
+        output_path = save_options_readiness_report(report)
+        print(format_options_readiness_report(report))
+        print(f"Saved options readiness report to: {output_path}")
+        return
+
+    if action == "summary":
+        print(format_options_journal_summary(summarize_options_journal(load_options_journal())))
+        return
+
+    if action == "open":
+        if len(sys.argv) < 9:
+            raise ValueError(
+                "Usage: python3 main.py options-ready open SYMBOL STRATEGY EXPIRATION STRIKE "
+                "ENTRY_PREMIUM CONTRACTS [--status planned|open] [--target-premium PRICE] "
+                "[--stop-premium PRICE]"
+            )
+        symbol = normalize_ticker(sys.argv[3])
+        strategy = sys.argv[4]
+        expiration = sys.argv[5]
+        strike = float(sys.argv[6])
+        entry_premium = float(sys.argv[7])
+        contracts = int(float(sys.argv[8]))
+        trade_id = append_option_trade({
+            "symbol": symbol,
+            "strategy": strategy,
+            "expiration": expiration,
+            "strike": strike,
+            "entry_premium": entry_premium,
+            "contracts": contracts,
+            "status": get_cli_option("--status", "planned"),
+            "source": get_cli_option("--source", "manual"),
+            "agent_run_id": get_cli_option("--run-id", ""),
+            "target_premium": get_cli_option("--target-premium", ""),
+            "stop_premium": get_cli_option("--stop-premium", ""),
+            "thesis": get_cli_option("--thesis", ""),
+            "notes": get_cli_option("--notes", ""),
+        })
+        print(f"Saved paper options idea: {trade_id}")
+        print(format_options_journal_summary(summarize_options_journal(load_options_journal())))
+        return
+
+    if action == "close":
+        if len(sys.argv) < 5:
+            raise ValueError(
+                "Usage: python3 main.py options-ready close OPTIONS_TRADE_ID EXIT_PREMIUM "
+                "[--reason TEXT] [--lessons TEXT]"
+            )
+        close_option_trade(
+            trade_id=sys.argv[3],
+            exit_premium=float(sys.argv[4]),
+            exit_reason=get_cli_option("--reason", ""),
+            lessons=get_cli_option("--lessons", ""),
+        )
+        print("Paper options idea closed.")
+        print(format_options_journal_summary(summarize_options_journal(load_options_journal())))
+        return
+
+    raise ValueError("Options-ready supports: status, summary, open, close")
+
+
 def news(ticker):
     try:
         from agents.news_intelligence import collect_overnight_news, format_news_report, save_news_report
@@ -730,6 +816,9 @@ def main():
         print("  python3 main.py data-health today")
         print("  python3 main.py project status")
         print("  python3 main.py options MSFT")
+        print("  python3 main.py options-ready status")
+        print("  python3 main.py options-ready status --symbol MSFT")
+        print("  python3 main.py options-ready summary")
         print("  python3 main.py news MSFT")
         print("  python3 main.py backtest MSFT")
         print("  python3 main.py analyze MSFT")
@@ -794,6 +883,8 @@ def main():
             project(ticker)
         elif command == "options":
             options(ticker)
+        elif command == "options-ready":
+            options_ready(ticker)
         elif command == "news":
             news(ticker)
         elif command == "backtest":

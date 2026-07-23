@@ -1,0 +1,92 @@
+{
+  "version": "1.0",
+  "purpose": "Prepare AIFundOS for options research and paper-options tracking before a paid provider is connected.",
+  "system_role": "governance_layer",
+  "allowed_beginner_strategies": [
+    {
+      "strategy": "long_call",
+      "direction": "bullish",
+      "max_loss": "premium_paid",
+      "requires": ["liquid_contract", "defined_exit", "event_check", "position_size_check"]
+    },
+    {
+      "strategy": "long_put",
+      "direction": "bearish",
+      "max_loss": "premium_paid",
+      "requires": ["liquid_contract", "defined_exit", "event_check", "position_size_check"]
+    },
+    {
+      "strategy": "call_debit_spread",
+      "direction": "bullish",
+      "max_loss": "net_debit_paid",
+      "requires": ["liquid_contracts", "defined_exit", "event_check", "position_size_check", "spread_width_check"]
+    },
+    {
+      "strategy": "put_debit_spread",
+      "direction": "bearish",
+      "max_loss": "net_debit_paid",
+      "requires": ["liquid_contracts", "defined_exit", "event_check", "position_size_check", "spread_width_check"]
+    }
+  ],
+  "blocked_strategies": [
+    "naked_call",
+    "naked_put",
+    "short_straddle",
+    "short_strangle",
+    "ratio_spread",
+    "calendar_spread",
+    "iron_condor",
+    "butterfly",
+    "complex_multi_leg"
+  ],
+  "checklist": {
+    "liquidity": {
+      "minimum_volume": 100,
+      "minimum_open_interest": 500,
+      "maximum_bid_ask_spread_pct": 0.15,
+      "preferred_bid_ask_spread_pct": 0.10
+    },
+    "contract_selection": {
+      "minimum_days_to_expiration": 21,
+      "preferred_days_to_expiration": 45,
+      "maximum_single_contract_iv_pct": 120,
+      "avoid_new_entries_inside_earnings_days": 5
+    },
+    "risk": {
+      "maximum_account_risk_pct": 0.5,
+      "maximum_options_sleeve_pct": 5.0,
+      "maximum_single_idea_premium_pct": 1.0,
+      "default_profit_take_pct": 50,
+      "default_stop_loss_pct": 50
+    },
+    "confirmation": {
+      "requires_stock_setup": true,
+      "requires_data_quality_gate_pass_or_conditional": true,
+      "requires_news_event_review": true,
+      "requires_options_provider_for_paper_options_approval": false
+    }
+  },
+  "provider_test_plan": [
+    "Fetch option chains for NVDA, MSFT, AMD, QQQ, and SPY.",
+    "Verify bid, ask, last, volume, open interest, implied volatility, and greeks are present.",
+    "Check historical option prices for at least 90 trading days.",
+    "Calculate spread percentage and reject illiquid contracts.",
+    "Compare provider option chain snapshots against Yahoo starter data.",
+    "Record sample long call, long put, call debit spread, and put debit spread paper trades.",
+    "Track premium P&L, max loss, break-even, expiration, and exit reason.",
+    "Review whether options evidence improves or worsens stock setup decisions."
+  ],
+  "education_terms": {
+    "delta": "How much the option price may move for a $1 move in the stock. Also rough directional exposure.",
+    "gamma": "How quickly delta changes as the stock moves.",
+    "theta": "Estimated daily time decay. Long options usually lose value as time passes.",
+    "vega": "How much the option price may change when implied volatility changes.",
+    "implied_volatility": "The market's embedded expectation for future movement, expressed through option prices.",
+    "iv_rank": "Where current implied volatility sits versus its own recent history.",
+    "bid_ask_spread": "The gap between what buyers bid and sellers ask. Wide spreads increase execution cost.",
+    "open_interest": "Contracts currently open. Higher open interest usually means better liquidity.",
+    "volume": "Contracts traded today.",
+    "premium": "The option price paid or received.",
+    "break_even": "The stock price needed at expiration to offset the premium paid."
+  }
+}
