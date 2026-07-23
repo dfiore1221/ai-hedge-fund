@@ -1,6 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
+from agents.macro_event_interpreter import interpret_macro_event_context
 from data.economic_calendar import format_calendar_event, get_economic_calendar
 from data.fred_data import get_fred_macro_snapshot
 from data.market_data import get_macro_market_snapshot, get_sector_rotation_snapshot
@@ -16,8 +17,7 @@ def generate_daily_market_intelligence():
     economic_calendar = get_economic_calendar()
     sector_rotation = get_sector_rotation_snapshot()
     assessment = assess_market_regime(macro, sector_rotation, official_macro, economic_calendar)
-
-    return {
+    report = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "macro": macro,
         "official_macro": official_macro,
@@ -25,6 +25,9 @@ def generate_daily_market_intelligence():
         "sector_rotation": sector_rotation,
         "assessment": assessment,
     }
+    report["macro_event_interpretation"] = interpret_macro_event_context(report)
+
+    return report
 
 
 def assess_market_regime(macro, sector_rotation, official_macro=None, economic_calendar=None):
@@ -303,6 +306,24 @@ def format_market_intelligence_report(report):
             f"20D {format_pct(item.get('twenty_day_change_pct'))}, "
             f"relative to SPY {format_pct(item.get('relative_to_spy_20d'))}"
         )
+
+    lines.extend([
+        "",
+        "## Macro Event Interpretation",
+    ])
+
+    interpretation = report.get("macro_event_interpretation") or {}
+    if interpretation:
+        lines.append(f"- {interpretation.get('committee_summary')}")
+        for item in interpretation.get("portfolio_implications", [])[:5]:
+            lines.append(f"- Portfolio: {item}")
+        sector = interpretation.get("sector_implications") or {}
+        if sector.get("potential_beneficiaries"):
+            lines.append(f"- Potential beneficiaries: {', '.join(sector['potential_beneficiaries'])}")
+        if sector.get("potential_risks"):
+            lines.append(f"- Potential risks: {', '.join(sector['potential_risks'])}")
+    else:
+        lines.append("- Macro event interpretation unavailable.")
 
     lines.extend([
         "",

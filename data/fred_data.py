@@ -59,10 +59,26 @@ FRED_SERIES = [
         "frequency": "monthly",
     },
     {
+        "id": "CPIAUCSL",
+        "key": "CPIAUCSL_MOM",
+        "name": "CPI MoM",
+        "category": "inflation",
+        "units": "pch",
+        "frequency": "monthly",
+    },
+    {
         "id": "PCEPI",
         "name": "PCE Price Index YoY",
         "category": "inflation",
         "units": "pc1",
+        "frequency": "monthly",
+    },
+    {
+        "id": "PCEPI",
+        "key": "PCEPI_MOM",
+        "name": "PCE Price Index MoM",
+        "category": "inflation",
+        "units": "pch",
         "frequency": "monthly",
     },
     {
@@ -77,6 +93,36 @@ FRED_SERIES = [
         "name": "Payrolls YoY",
         "category": "labor",
         "units": "pc1",
+        "frequency": "monthly",
+    },
+    {
+        "id": "ICSA",
+        "name": "Initial Jobless Claims",
+        "category": "labor",
+        "units": "lin",
+        "frequency": "weekly",
+    },
+    {
+        "id": "RSAFS",
+        "key": "RSAFS_MOM",
+        "name": "Retail Sales MoM",
+        "category": "consumer",
+        "units": "pch",
+        "frequency": "monthly",
+    },
+    {
+        "id": "RSAFS",
+        "key": "RSAFS_YOY",
+        "name": "Retail Sales YoY",
+        "category": "consumer",
+        "units": "pc1",
+        "frequency": "monthly",
+    },
+    {
+        "id": "UMCSENT",
+        "name": "University of Michigan Consumer Sentiment",
+        "category": "consumer",
+        "units": "lin",
         "frequency": "monthly",
     },
     {
@@ -184,6 +230,7 @@ def fetch_latest_observation(api_key, config):
 def base_series(config):
     return {
         "id": config["id"],
+        "key": config.get("key", config["id"]),
         "name": config["name"],
         "category": config["category"],
         "units": config["units"],
@@ -210,25 +257,31 @@ def first_numeric_observation(observations):
 
 
 def build_fred_summary(series_results):
-    by_id = {
-        item["id"]: item
+    by_key = {
+        item.get("key", item["id"]): item
         for item in series_results
         if "error" not in item and item.get("value") is not None
     }
 
     return {
-        "ten_year_yield": value_for(by_id, "DGS10"),
-        "two_year_yield": value_for(by_id, "DGS2"),
-        "yield_curve_10y_2y": value_for(by_id, "T10Y2Y"),
-        "fed_funds": value_for(by_id, "FEDFUNDS"),
-        "sofr": value_for(by_id, "SOFR"),
-        "cpi_yoy": value_for(by_id, "CPIAUCSL"),
-        "pce_yoy": value_for(by_id, "PCEPI"),
-        "unemployment_rate": value_for(by_id, "UNRATE"),
-        "payrolls_yoy": value_for(by_id, "PAYEMS"),
-        "high_yield_spread": value_for(by_id, "BAMLH0A0HYM2"),
-        "investment_grade_spread": value_for(by_id, "BAMLC0A0CM"),
-        "gdp_yoy": value_for(by_id, "GDPC1"),
+        "ten_year_yield": value_for(by_key, "DGS10"),
+        "two_year_yield": value_for(by_key, "DGS2"),
+        "yield_curve_10y_2y": value_for(by_key, "T10Y2Y"),
+        "fed_funds": value_for(by_key, "FEDFUNDS"),
+        "sofr": value_for(by_key, "SOFR"),
+        "cpi_yoy": value_for(by_key, "CPIAUCSL"),
+        "cpi_mom": value_for(by_key, "CPIAUCSL_MOM"),
+        "pce_yoy": value_for(by_key, "PCEPI"),
+        "pce_mom": value_for(by_key, "PCEPI_MOM"),
+        "unemployment_rate": value_for(by_key, "UNRATE"),
+        "payrolls_yoy": value_for(by_key, "PAYEMS"),
+        "initial_jobless_claims": value_for(by_key, "ICSA"),
+        "retail_sales_mom": value_for(by_key, "RSAFS_MOM"),
+        "retail_sales_yoy": value_for(by_key, "RSAFS_YOY"),
+        "consumer_sentiment": value_for(by_key, "UMCSENT"),
+        "high_yield_spread": value_for(by_key, "BAMLH0A0HYM2"),
+        "investment_grade_spread": value_for(by_key, "BAMLC0A0CM"),
+        "gdp_yoy": value_for(by_key, "GDPC1"),
     }
 
 

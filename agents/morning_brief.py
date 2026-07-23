@@ -442,6 +442,7 @@ def format_morning_brief(report):
     data_gate = data_health.get("gate") or {}
     journal_summary = report.get("journal_summary") or {}
     core_sleeve = report.get("core_etf_sleeve") or {}
+    macro_interpretation = report["macro"].get("macro_event_interpretation") or {}
 
     lines = [
         "# AI Hedge Fund Morning Brief",
@@ -458,6 +459,20 @@ def format_morning_brief(report):
         f"- Watchlist Setups: {count_decisions(summaries, 'WATCHLIST SETUP')}",
         f"- No-Trade / Avoid Today: {count_decisions(summaries, 'NO TRADE')}",
         f"- Needs Data: {count_decisions(summaries, 'NEEDS DATA')}",
+        "",
+        "## Macro Event Interpretation",
+        f"- {macro_interpretation.get('committee_summary', 'Macro event interpretation unavailable.')}",
+    ]
+    lines.extend([
+        f"- {item}"
+        for item in macro_interpretation.get("portfolio_implications", [])[:5]
+    ] or ["- No specific portfolio implication flagged."])
+    sector_implications = macro_interpretation.get("sector_implications") or {}
+    if sector_implications.get("potential_beneficiaries"):
+        lines.append(f"- Potential beneficiaries: {', '.join(sector_implications['potential_beneficiaries'])}")
+    if sector_implications.get("potential_risks"):
+        lines.append(f"- Potential risks: {', '.join(sector_implications['potential_risks'])}")
+    lines.extend([
         "",
         "## Data Quality Gate",
         f"- Score: {data_health.get('data_quality_score', 'n/a')}/100",
@@ -484,7 +499,7 @@ def format_morning_brief(report):
         + format_core_allocations(core_sleeve.get("desired_allocations", [])),
         "",
         "### Core ETF Actions",
-    ]
+    ])
     lines.extend([f"- {item}" for item in core_sleeve.get("actions", [])] or ["- None."])
     lines.extend([
         "",
