@@ -76,6 +76,8 @@ def run_intraday_monitor(send_alert=True, dry_run=False, apply_fills=False, save
 
     report = {
         "agent": "Intraday Monitor",
+        "system_role": "tool_workflow",
+        "layer": "Intraday Alerting",
         "run_id": run_id,
         "created_at": created_at,
         "send_alert": send_alert,

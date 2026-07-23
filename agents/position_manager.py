@@ -53,6 +53,8 @@ def generate_position_manager_report(use_llm=False, save_memory=True):
 
     report = {
         "agent": "Position Manager",
+        "system_role": "tool_workflow",
+        "layer": "Paper Position Supervision",
         "run_id": run_id,
         "created_at": created_at,
         "mode": "paper_trading_position_management",

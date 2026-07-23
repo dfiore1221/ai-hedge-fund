@@ -16,6 +16,7 @@ def analyze_technical_setup(ticker):
     if history.get("error"):
         return {
             "agent": "Technical Analyst",
+            "system_role": "committee_agent",
             "symbol": ticker,
             "stance": "no_trade",
             "confidence": 0.0,
@@ -40,6 +41,7 @@ def analyze_technical_setup(ticker):
 
     return {
         "agent": "Technical Analyst",
+        "system_role": "committee_agent",
         "run_id": datetime.now().strftime("%Y-%m-%d-technical"),
         "symbol": ticker,
         "stance": stance,

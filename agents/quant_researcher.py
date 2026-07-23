@@ -15,6 +15,8 @@ def backtest_sma_trend_strategy(ticker):
     if history.get("error"):
         return {
             "agent": "Quantitative Researcher",
+            "system_role": "shared_data_layer",
+            "layer": "Backtest Expectancy Evidence",
             "symbol": ticker,
             "strategy": "sma_20_50_trend",
             "error": history["error"],
@@ -56,6 +58,8 @@ def backtest_sma_trend_strategy(ticker):
 
     return {
         "agent": "Quantitative Researcher",
+        "system_role": "shared_data_layer",
+        "layer": "Backtest Expectancy Evidence",
         "symbol": ticker,
         "strategy": "sma_20_50_trend",
         "timestamp": datetime.now().isoformat(timespec="seconds"),

@@ -63,6 +63,8 @@ def generate_conflict_memo(symbol, agent_outputs):
 
     return {
         "agent": "Debate / Conflict Engine",
+        "system_role": "governance_layer",
+        "layer": "Conflict Detection",
         "symbol": symbol.upper(),
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "conflicts": conflicts,

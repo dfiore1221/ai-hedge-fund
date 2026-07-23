@@ -134,6 +134,7 @@ def evaluate_trade_risk(ticker, technical_report=None, policy=None):
 
     return {
         "agent": "Risk Manager",
+        "system_role": "committee_agent",
         "run_id": datetime.now().strftime("%Y-%m-%d-risk"),
         "symbol": ticker,
         "decision": decision,
@@ -340,6 +341,7 @@ def max_entry_for_reward_to_risk(stop, target, minimum_reward_to_risk):
 def build_veto_report(ticker, policy, technical_report, reasons):
     return {
         "agent": "Risk Manager",
+        "system_role": "committee_agent",
         "run_id": datetime.now().strftime("%Y-%m-%d-risk"),
         "symbol": ticker,
         "decision": "veto",

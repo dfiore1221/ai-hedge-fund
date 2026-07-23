@@ -143,6 +143,8 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
 
     return {
         "agent": "Data Quality",
+        "system_role": "governance_layer",
+        "layer": "Data Quality Gate",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "watchlist_count": len(symbols),
         "live_checks_enabled": live_checks,

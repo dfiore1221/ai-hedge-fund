@@ -121,6 +121,8 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
 
     return {
         "agent": "Morning Brief",
+        "system_role": "tool_workflow",
+        "layer": "Decision Presentation",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "mode": "watch_only",
         "data_health": data_health,
@@ -460,7 +462,7 @@ def format_morning_brief(report):
         f"- No-Trade / Avoid Today: {count_decisions(summaries, 'NO TRADE')}",
         f"- Needs Data: {count_decisions(summaries, 'NEEDS DATA')}",
         "",
-        "## Macro Event Interpretation",
+        "## Shared Macro Context",
         f"- {macro_interpretation.get('committee_summary', 'Macro event interpretation unavailable.')}",
     ]
     lines.extend([
@@ -566,7 +568,7 @@ def format_morning_brief(report):
         "",
         "## Guardrails",
         "- This is a watch-only research brief, not a live trade instruction.",
-        "- Hard Risk vetoes override bullish thesis, options flow, or news clues.",
+        "- Risk vetoes override shared evidence such as thesis clues, news, options, or backtests.",
         "- Conditional setups require the stated entry, target, or confirmation before simulated trade approval.",
         "- Any paper trade still requires human review before action.",
         "",

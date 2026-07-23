@@ -29,6 +29,8 @@ def generate_daily_setup_review(review_day=None, source_path=None, top_n=None, s
 
     report = {
         "agent": "Daily Setup Review",
+        "system_role": "memory_layer",
+        "layer": "Daily Setup Self-Review",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "review_date": review_date.isoformat(),
         "review_mode": "swing_trade_day_check",
@@ -117,6 +119,8 @@ def parse_legacy_morning_brief_markdown(path):
 
     return {
         "agent": "Morning Brief",
+        "system_role": "tool_workflow",
+        "layer": "Legacy Brief Parser",
         "created_at": created_at,
         "top_n": 10,
         "ideas": ideas[:10],

@@ -173,6 +173,8 @@ def collect_overnight_news(ticker, limit=10):
 
     return {
         "agent": "Overnight News Analyst",
+        "system_role": "shared_data_layer",
+        "layer": "News And Catalyst Evidence",
         "symbol": ticker,
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "items": items,

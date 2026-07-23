@@ -69,6 +69,8 @@ def answer_ticker_question(question, symbol, topic):
 
     return {
         "agent": "Committee Question",
+        "system_role": "tool_workflow",
+        "layer": "Committee Interface",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "scope": "ticker",
         "symbol": symbol,
@@ -114,6 +116,8 @@ def answer_portfolio_question(question, topic):
 
     return {
         "agent": "Committee Question",
+        "system_role": "tool_workflow",
+        "layer": "Committee Interface",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "scope": "portfolio",
         "symbol": "PORTFOLIO",

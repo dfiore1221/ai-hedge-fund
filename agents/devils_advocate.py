@@ -58,6 +58,8 @@ def write_countercase(symbol, agent_outputs, conflicts):
 
     return {
         "agent": "Behavioral / Devil's Advocate",
+        "system_role": "governance_layer",
+        "layer": "Exception Challenge",
         "run_id": datetime.now().strftime("%Y-%m-%d-devils-advocate"),
         "symbol": symbol,
         "stance": "challenge",

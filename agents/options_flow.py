@@ -56,6 +56,8 @@ def analyze_options_flow(ticker, max_expirations=MAX_EXPIRATIONS):
 
     return {
         "agent": "Options & Flow Analyst",
+        "system_role": "shared_data_layer",
+        "layer": "Options Flow Evidence",
         "symbol": ticker,
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "provider": "Yahoo Finance / yfinance",
@@ -294,6 +296,8 @@ def get_underlying_price(instrument):
 def build_error(ticker, error):
     return {
         "agent": "Options & Flow Analyst",
+        "system_role": "shared_data_layer",
+        "layer": "Options Flow Evidence",
         "symbol": ticker,
         "stance": "unknown",
         "confidence": 0.0,

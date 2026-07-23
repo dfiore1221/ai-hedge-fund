@@ -2,6 +2,18 @@
 
 An early-stage research operating system for generating investment-grade company research memos using fund governance documents, public market data, SEC filing metadata, and AI analysis.
 
+## System Roles
+
+AIFundOS separates decision-making from evidence, governance, memory, and tools so the Committee does not get noisy as the system grows.
+
+- **Committee agents:** Macro, Technical, Risk, CIO, and Devil's Advocate when a setup needs a serious challenge.
+- **Shared data layers:** market context, macro events, news, options evidence, backtests, SEC/fundamental facts, economic calendars, and data quality.
+- **Governance layers:** watch-only gates, human approval, risk vetoes, market-hours realism, earnings/event blocks, and core ETF policy bands.
+- **Memory layers:** research memory, daily setup reviews, weekly reviews, question feedback, and closed-trade outcome scoring.
+- **Tools and workflows:** dashboard, morning brief, paper ledger, paper fills, position manager, intraday monitor, email delivery, and desktop ticker.
+
+Rule of thumb: if a module makes or challenges a decision, it can be a Committee agent. If it supplies facts, calculations, or context, it should be a shared data layer. The full source of truth lives in `docs/governance/aifundos_system_roles_v1.md`.
+
 ## Current Workflow
 
 ```bash

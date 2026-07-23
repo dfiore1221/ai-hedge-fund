@@ -1,0 +1,48 @@
+{
+  "version": "1.0",
+  "committee_agents": [
+    "Macro",
+    "Technical Analyst",
+    "Risk Manager",
+    "Chief Investment Officer",
+    "Devil's Advocate"
+  ],
+  "shared_data_layers": [
+    "Data Quality Gate",
+    "Market Intelligence",
+    "Macro Event Interpretation",
+    "News Intelligence",
+    "Options Flow Evidence",
+    "Backtest Expectancy",
+    "SEC / Fundamentals",
+    "Economic Calendar"
+  ],
+  "governance_layers": [
+    "Watch-only mode",
+    "Human paper-trade approval",
+    "Risk veto",
+    "Data quality gate",
+    "Market-hours execution realism",
+    "Earnings and event guardrails",
+    "Core ETF policy bands"
+  ],
+  "memory_layers": [
+    "Research memory",
+    "Committee question feedback",
+    "Daily setup review",
+    "Weekly review",
+    "Trade outcome feedback"
+  ],
+  "tools_and_workflows": [
+    "Morning brief",
+    "Dashboard",
+    "Paper ledger",
+    "Paper fills",
+    "Core ETF rebalance approval",
+    "Position manager",
+    "Intraday monitor",
+    "Email delivery and retry",
+    "Desktop portfolio ticker"
+  ],
+  "rule": "If it makes or challenges a decision, it can be a Committee agent. If it supplies facts, context, signals, or calculations, it is a shared data layer. If it enforces discipline, limits, approvals, or safety, it is governance. If it records outcomes or improves future judgment, it is memory. If it tracks, executes, displays, or notifies, it is a tool or workflow."
+}

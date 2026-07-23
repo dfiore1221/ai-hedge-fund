@@ -21,6 +21,8 @@ def interpret_macro_event_context(macro_report):
 
     return {
         "agent": "Macro Event Interpreter",
+        "system_role": "shared_data_layer",
+        "layer": "Shared Macro Event Context",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "status": "available" if official_macro.get("status") not in {None, "not_configured"} else "needs_data",
         "inflation": inflation,

@@ -75,6 +75,7 @@ def create_cio_summary(ticker, macro_report=None, include_options=True):
 
     result = {
         "agent": "Chief Investment Officer",
+        "system_role": "committee_agent",
         "run_id": run_id,
         "symbol": ticker,
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -116,6 +117,8 @@ def create_cio_summary(ticker, macro_report=None, include_options=True):
 def build_options_skipped_report(ticker):
     return {
         "agent": "Options & Flow Analyst",
+        "system_role": "shared_data_layer",
+        "layer": "Options Flow Evidence",
         "symbol": ticker.upper().strip(),
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "provider": "not_run",

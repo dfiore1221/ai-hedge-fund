@@ -25,6 +25,8 @@ def generate_weekly_review(end_day=None):
 
     report = {
         "agent": "Weekly Review",
+        "system_role": "memory_layer",
+        "layer": "Weekly Accountability Review",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "week_start": start_date.isoformat(),
         "week_end": end_date.isoformat(),

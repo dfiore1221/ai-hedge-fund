@@ -18,6 +18,9 @@ def generate_daily_market_intelligence():
     sector_rotation = get_sector_rotation_snapshot()
     assessment = assess_market_regime(macro, sector_rotation, official_macro, economic_calendar)
     report = {
+        "agent": "Market Intelligence",
+        "system_role": "shared_data_layer",
+        "layer": "Shared Market Context",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "macro": macro,
         "official_macro": official_macro,
@@ -309,7 +312,7 @@ def format_market_intelligence_report(report):
 
     lines.extend([
         "",
-        "## Macro Event Interpretation",
+        "## Shared Macro Context",
     ])
 
     interpretation = report.get("macro_event_interpretation") or {}

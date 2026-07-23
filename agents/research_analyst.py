@@ -103,9 +103,10 @@ def build_research_prompt(
     macro_scoring_rules,
 ):
     return f"""
-You are the first Research Analyst Agent for an AI Hedge Fund.
+You are the Fundamental Research Evidence Layer for AIFundOS.
 
 You must follow the fund documents below. Treat them as binding operating rules.
+You provide primary-source company evidence for the Committee, but you do not act as a separate voting Committee agent.
 
 Fund Documents:
 {fund_docs}

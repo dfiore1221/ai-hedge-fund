@@ -18,6 +18,8 @@ def generate_feedback_report():
 
     return {
         "agent": "Feedback Loop",
+        "system_role": "memory_layer",
+        "layer": "Outcome Feedback",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "closed_trades_count": len(closed_trades),
         "linked_trades_count": count_linked_trades(closed_trades),

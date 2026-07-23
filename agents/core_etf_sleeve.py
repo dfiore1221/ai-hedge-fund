@@ -35,6 +35,8 @@ def analyze_core_etf_sleeve(macro_report, journal=None, ledger=None):
 
     return {
         "agent": "Core ETF Sleeve",
+        "system_role": "tool_workflow",
+        "layer": "Portfolio Construction Tool",
         "regime": regime,
         "equity": round_money(equity),
         "target_sleeve_pct": round_pct(target_sleeve_pct),
