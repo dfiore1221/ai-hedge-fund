@@ -212,7 +212,7 @@ The `data-health today` command:
 
 1. Checks configured data providers without printing secret values.
 2. Runs a live sample of watchlist price-history checks through the current market-data path.
-3. Verifies FRED macro data, the FRED/Trading Economics economic calendar path, and Finnhub/Yahoo news availability when configured or available.
+3. Verifies FRED macro data, the FRED/Trading Economics economic calendar path, and Benzinga/Finnhub/Yahoo news availability when configured or available.
 4. Checks Tiingo latest equity prices when `TIINGO_API_KEY` is configured, or Alpaca latest stock bars when Alpaca keys are configured, then compares the second provider vs Yahoo for provider agreement.
 5. Scores the morning data packet across price/bars, reference data, earnings/events, news/analyst, options, macro/event context, provider agreement checks, and critical errors.
 6. Produces a data-quality gate: Pass, Conditional, Watch Only, Needs Data, or Blocked.
@@ -411,7 +411,7 @@ See `docs/data_quality_systems_research.md` for the current data-provider resear
 
 - [x] Add FRED official macro data integration. Requires `FRED_API_KEY` in `.env` to activate live official macro series.
 - [x] Add economic calendar integration. Uses `TRADING_ECONOMICS_API_KEY` when available, otherwise uses the free FRED release calendar through `FRED_API_KEY`.
-- [x] Add starter news / analyst feed. Uses Finnhub company news and recommendation trends when `FINNHUB_API_KEY` is configured, with Yahoo starter headlines and analyst actions as fallback.
+- [x] Add premium news / analyst feed. Uses Benzinga market-moving news and analyst ratings when `BENZINGA_API_KEY` is configured, Finnhub company news and recommendation trends when `FINNHUB_API_KEY` is configured, and Yahoo starter headlines/actions as fallback.
 - [x] Add better market data provider. Uses Tiingo latest equity prices when `TIINGO_API_KEY` is configured, or Alpaca latest stock bars when Alpaca keys are configured, with Yahoo as fallback.
 - [ ] Add options data provider. Interim enhanced starter layer uses Yahoo/yfinance chains for watch-only put/call, IV, liquidity, and unusual-activity clues.
 - [x] Add local data cache. Stores successful provider JSON responses under ignored `data_cache/` with short TTLs and stale fallback where appropriate.

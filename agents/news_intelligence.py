@@ -4,6 +4,12 @@ from pathlib import Path
 
 import yfinance as yf
 
+from data.benzinga_data import (
+    fetch_benzinga_news,
+    fetch_benzinga_ratings,
+    is_benzinga_configured,
+    parse_benzinga_datetime,
+)
 from data.finnhub_data import (
     fetch_company_news,
     fetch_recommendation_trends,
@@ -112,6 +118,7 @@ SYMBOL_ALIASES = {
 
 def collect_overnight_news(ticker, limit=10):
     ticker = ticker.upper().strip()
+    benzinga_configured = is_benzinga_configured()
     finnhub_configured = is_finnhub_configured()
     provider_status = []
     yahoo_error = None
@@ -127,6 +134,24 @@ def collect_overnight_news(ticker, limit=10):
         news_items = []
 
     items = []
+    benzinga_news = {"status": "not_configured", "items": []}
+    benzinga_ratings = {"status": "not_configured", "items": []}
+    if benzinga_configured:
+        benzinga_news = fetch_benzinga_news(ticker, limit=limit)
+        provider_status.append({
+            "name": "Benzinga News",
+            "status": benzinga_news.get("status"),
+            "detail": build_provider_detail(benzinga_news, "market-moving headlines"),
+        })
+        for item in benzinga_news.get("items", []):
+            items.append(normalize_benzinga_news_item(item, aliases))
+    else:
+        provider_status.append({
+            "name": "Benzinga News",
+            "status": "not_configured",
+            "detail": "BENZINGA_API_KEY is not configured.",
+        })
+
     finnhub_news = {"status": "not_configured", "items": []}
     if finnhub_configured:
         finnhub_news = fetch_company_news(ticker, limit=limit)
@@ -150,6 +175,15 @@ def collect_overnight_news(ticker, limit=10):
 
     items = dedupe_news_items(items)[:limit]
     analyst_actions = collect_analyst_actions(yf_ticker) if yf_ticker is not None else []
+    if benzinga_configured:
+        benzinga_ratings = fetch_benzinga_ratings(ticker)
+        provider_status.append({
+            "name": "Benzinga Analyst Ratings",
+            "status": benzinga_ratings.get("status"),
+            "detail": build_provider_detail(benzinga_ratings, "analyst ratings"),
+        })
+        analyst_actions.extend(normalize_benzinga_ratings(benzinga_ratings.get("items", [])))
+
     finnhub_recommendations = {"status": "not_configured", "items": []}
     if finnhub_configured:
         finnhub_recommendations = fetch_recommendation_trends(ticker)
@@ -159,9 +193,13 @@ def collect_overnight_news(ticker, limit=10):
             "detail": build_provider_detail(finnhub_recommendations, "recommendation trends"),
         })
         analyst_actions.extend(normalize_finnhub_recommendations(finnhub_recommendations.get("items", [])))
+    analyst_actions = dedupe_analyst_actions(analyst_actions)
 
     summary = summarize_news(items, analyst_actions)
     missing_information = build_missing_information(
+        benzinga_configured,
+        benzinga_news,
+        benzinga_ratings,
         finnhub_configured,
         finnhub_news,
         finnhub_recommendations,
@@ -264,6 +302,34 @@ def normalize_finnhub_news_item(item, aliases):
     }
 
 
+def normalize_benzinga_news_item(item, aliases):
+    title = item.get("title") or item.get("headline")
+    teaser = item.get("teaser") or item.get("summary") or item.get("body")
+    text = " ".join([value for value in [title, teaser] if value])
+    published = parse_benzinga_datetime(
+        item.get("created") or item.get("updated") or item.get("published") or item.get("date")
+    )
+    age_hours = hours_since(published)
+    symbol_relevant = is_symbol_relevant(text, aliases)
+    sentiment = score_text_sentiment(text)
+    tags = tag_catalysts(text)
+
+    return {
+        "title": title,
+        "publisher": item.get("author") or "Benzinga",
+        "url": item.get("url"),
+        "published": published.isoformat() if published else None,
+        "age_hours": age_hours,
+        "is_fresh": age_hours is not None and age_hours <= FRESH_NEWS_HOURS,
+        "sentiment_score": sentiment,
+        "sentiment_label": sentiment_label(sentiment),
+        "catalyst_tags": tags,
+        "symbol_relevant": symbol_relevant,
+        "relevance_score": score_relevance(tags, age_hours, sentiment, symbol_relevant),
+        "provider": "Benzinga",
+    }
+
+
 def collect_analyst_actions(yf_ticker, limit=8):
     try:
         actions = yf_ticker.upgrades_downgrades
@@ -292,6 +358,45 @@ def collect_analyst_actions(yf_ticker, limit=8):
         })
 
     return records
+
+
+def normalize_benzinga_ratings(items):
+    records = []
+    for item in items:
+        action = item.get("action_company") or item.get("action") or item.get("action_pt")
+        from_grade = item.get("rating_prior") or item.get("previous_rating")
+        to_grade = item.get("rating_current") or item.get("rating") or item.get("current_rating")
+        records.append({
+            "date": item.get("date") or item.get("date_updated") or item.get("time"),
+            "firm": item.get("analyst") or item.get("firm") or "Benzinga",
+            "analyst_name": item.get("analyst_name"),
+            "action": normalize_analyst_action(action),
+            "from_grade": from_grade,
+            "to_grade": to_grade,
+            "price_target_from": item.get("pt_prior") or item.get("price_target_prior"),
+            "price_target_to": item.get("pt_current") or item.get("price_target") or item.get("price_target_current"),
+            "sentiment_score": score_analyst_action(action, from_grade, to_grade),
+            "provider": "Benzinga",
+        })
+    return records
+
+
+def dedupe_analyst_actions(actions):
+    seen = set()
+    deduped = []
+    for item in actions:
+        key = (
+            normalize_dedupe_key(item.get("date")),
+            normalize_dedupe_key(item.get("firm")),
+            normalize_dedupe_key(item.get("action")),
+            normalize_dedupe_key(item.get("from_grade")),
+            normalize_dedupe_key(item.get("to_grade")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
 
 
 def normalize_finnhub_recommendations(items):
@@ -526,6 +631,8 @@ def normalize_analyst_action(action):
     text = str(action or "").lower()
     if text == "main":
         return "maintained"
+    if text == "reit":
+        return "reiterates"
     if text:
         return text
     return None
@@ -571,8 +678,28 @@ def build_provider_detail(response, label):
     return response.get("error") or response.get("status") or "No detail."
 
 
-def build_missing_information(finnhub_configured, finnhub_news, finnhub_recommendations):
+def build_missing_information(
+    benzinga_configured,
+    benzinga_news,
+    benzinga_ratings,
+    finnhub_configured,
+    finnhub_news,
+    finnhub_recommendations,
+):
     missing = []
+
+    benzinga_news_ok = benzinga_news.get("status") in {"ok", "empty"}
+    benzinga_ratings_ok = benzinga_ratings.get("status") in {"ok", "empty"}
+
+    if not benzinga_configured:
+        missing.append("Benzinga is not connected; premium real-time market-moving news is unavailable.")
+    elif not benzinga_news_ok:
+        missing.append("Benzinga news feed failed, was rate-limited, or is not included in the current plan.")
+    elif benzinga_news.get("status") == "empty":
+        missing.append("Benzinga returned no recent market-moving headlines for this symbol.")
+
+    if benzinga_configured and not benzinga_ratings_ok:
+        missing.append("Benzinga analyst ratings feed failed, was rate-limited, or is not included in the current plan.")
 
     if not finnhub_configured:
         missing.append("Finnhub is not connected; using Yahoo starter headlines and analyst actions only.")
@@ -584,7 +711,7 @@ def build_missing_information(finnhub_configured, finnhub_news, finnhub_recommen
     if finnhub_configured and finnhub_recommendations.get("status") not in {"ok", "empty"}:
         missing.append("Finnhub recommendation trend feed failed or was rate-limited.")
 
-    missing.append("Premium real-time market-moving news and full analyst-note text are not connected yet.")
+    missing.append("Full broker research-note text is not connected yet.")
     return missing
 
 

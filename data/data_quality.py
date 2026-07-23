@@ -6,6 +6,11 @@ from datetime import date, datetime
 from pathlib import Path
 
 from data.alpaca_data import fetch_latest_stock_bars
+from data.benzinga_data import (
+    fetch_benzinga_news,
+    fetch_benzinga_ratings,
+    is_benzinga_configured,
+)
 from data.economic_calendar import get_economic_calendar
 from data.finnhub_data import (
     fetch_company_news,
@@ -333,6 +338,23 @@ def check_yahoo_news(symbol):
 
 
 def check_news_provider(symbol):
+    if is_benzinga_configured():
+        news = fetch_benzinga_news(symbol, days_back=3, limit=10)
+        ratings = fetch_benzinga_ratings(symbol, days_back=180, limit=5)
+        news_ok = news.get("status") in {"ok", "empty"}
+        ratings_ok = ratings.get("status") in {"ok", "empty"}
+
+        return {
+            "symbol": symbol,
+            "provider": "Benzinga",
+            "status": "ok" if news_ok and ratings_ok else "error",
+            "headline_count": len(news.get("items", [])),
+            "recommendation_count": len(ratings.get("items", [])),
+            "message": build_benzinga_news_check_message(news, ratings),
+            "news_status": news.get("status"),
+            "recommendation_status": ratings.get("status"),
+        }
+
     if is_finnhub_configured():
         news = fetch_company_news(symbol, days_back=3, limit=10)
         recommendations = fetch_recommendation_trends(symbol, limit=2)
@@ -351,6 +373,25 @@ def check_news_provider(symbol):
         }
 
     return check_yahoo_news(symbol)
+
+
+def build_benzinga_news_check_message(news, ratings):
+    parts = []
+    if news.get("status") == "ok":
+        parts.append(f"Benzinga returned {len(news.get('items', []))} headlines.")
+    elif news.get("status") == "empty":
+        parts.append("Benzinga returned no recent headlines.")
+    else:
+        parts.append(f"Benzinga news check failed: {news.get('error', news.get('status'))}.")
+
+    if ratings.get("status") == "ok":
+        parts.append(f"Benzinga returned {len(ratings.get('items', []))} analyst ratings.")
+    elif ratings.get("status") == "empty":
+        parts.append("Benzinga returned no recent analyst ratings.")
+    else:
+        parts.append(f"Benzinga ratings check failed: {ratings.get('error', ratings.get('status'))}.")
+
+    return " ".join(parts)
 
 
 def check_market_price_provider(symbols):
@@ -614,14 +655,14 @@ def build_event_context_detail(economic_calendar, event_provider_configured):
 
 
 def build_news_context_detail(news_check, premium_news_provider_configured):
-    if premium_news_provider_configured and news_check and news_check.get("provider") == "Finnhub":
+    if premium_news_provider_configured and news_check and news_check.get("provider") in {"Benzinga", "Finnhub"}:
         if news_check.get("status") == "ok":
             return (
-                "Finnhub company-news and recommendation-trend checks available "
+                f"{news_check.get('provider')} news and analyst checks available "
                 f"({news_check.get('headline_count', 0)} headlines, "
-                f"{news_check.get('recommendation_count', 0)} recommendation snapshots)."
+                f"{news_check.get('recommendation_count', 0)} analyst records)."
             )
-        return news_check.get("message") or "Finnhub configured but live check failed."
+        return news_check.get("message") or f"{news_check.get('provider')} configured but live check failed."
     if premium_news_provider_configured:
         return "Premium news/analyst provider configured."
     if news_check and news_check.get("status") == "ok":
@@ -815,11 +856,11 @@ def format_data_health_report(report):
 
     lines.extend(["", "## News Provider Check"])
     news_check = report.get("starter_news_check") or {}
-    if news_check.get("provider") == "Finnhub":
+    if news_check.get("provider") in {"Benzinga", "Finnhub"}:
         lines.append(
-            f"- {news_check.get('symbol')}: {news_check.get('status')} via Finnhub, "
+            f"- {news_check.get('symbol')}: {news_check.get('status')} via {news_check.get('provider')}, "
             f"{news_check.get('headline_count', 0)} headlines, "
-            f"{news_check.get('recommendation_count', 0)} recommendation snapshots."
+            f"{news_check.get('recommendation_count', 0)} analyst records."
         )
         lines.append(f"- Detail: {news_check.get('message', 'n/a')}")
     elif news_check.get("status") == "ok":
