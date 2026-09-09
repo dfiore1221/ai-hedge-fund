@@ -58,13 +58,14 @@ def answer_ticker_question(question, symbol, topic):
 
     decision = cio_report.get("final_decision") or {}
     trade_plan = cio_report.get("trade_plan") or {}
-    learning_notes = build_ticker_learning_notes(cio_report, topic)
+    feedback = generate_feedback_report()
+    learning_notes = build_ticker_learning_notes(cio_report, topic, feedback)
     if position_context.get("has_open_position"):
         learning_notes.insert(
             0,
             "This question involved an open simulated position, so future review should score the management decision separately from the original entry call.",
         )
-    answer = format_ticker_committee_answer(question, cio_report, learning_notes, position_context)
+    answer = format_ticker_committee_answer(question, cio_report, learning_notes, position_context, feedback)
     status = "MANAGE OPEN POSITION" if position_context.get("has_open_position") else decision.get("status")
 
     return {
@@ -81,6 +82,7 @@ def answer_ticker_question(question, symbol, topic):
         "confidence": decision.get("confidence"),
         "answer_markdown": answer,
         "learning_notes": learning_notes,
+        "feedback": compact_feedback_snapshot(feedback),
         "committee_snapshot": compact_cio_snapshot(cio_report),
         "position_context": position_context,
         "suggested_trade_plan": trade_plan,
@@ -91,7 +93,7 @@ def answer_portfolio_question(question, topic):
     run_id = f"{datetime.now().strftime('%Y-%m-%d')}-portfolio-committee-question"
     macro_report = generate_daily_market_intelligence()
     ledger = build_paper_ledger(load_trade_journal())
-    data_health = generate_data_health_report(live_checks=False)
+    data_health = generate_data_health_report(live_checks=True)
     feedback = generate_feedback_report()
     morning = load_latest_morning_brief_json()
     learning_notes = build_portfolio_learning_notes(macro_report, ledger, data_health, feedback, topic)
@@ -135,13 +137,13 @@ def answer_portfolio_question(question, topic):
                 "gate": gate,
             },
             "account": ledger.get("account"),
-            "feedback": feedback.get("trade_expectancy"),
+            "feedback": compact_feedback_snapshot(feedback),
             "morning_created_at": morning.get("created_at"),
         },
     }
 
 
-def format_ticker_committee_answer(question, cio_report, learning_notes, position_context=None):
+def format_ticker_committee_answer(question, cio_report, learning_notes, position_context=None, feedback=None):
     decision = cio_report.get("final_decision") or {}
     plan = cio_report.get("trade_plan") or {}
     conflict_memo = cio_report.get("conflict_memo") or {}
@@ -187,8 +189,14 @@ def format_ticker_committee_answer(question, cio_report, learning_notes, positio
         f"- Risk: {cio_report.get('risk_decision')}",
         f"- News: {cio_report.get('news_stance') or 'n/a'}; top headline: {cio_report.get('news_top_headline') or 'n/a'}",
         f"- Options: {cio_report.get('options_stance') or 'n/a'}",
+        f"- Alternative Data: {cio_report.get('alternative_data_stance') or 'n/a'}; {cio_report.get('alternative_data_summary') or 'n/a'}",
         f"- Quant: expectancy {format_number(cio_report.get('backtest_expectancy'))}%, sample {cio_report.get('backtest_sample_size') or 'n/a'}",
         f"- Devil's Advocate: {conflict_memo.get('conflict_count', 0)} conflict(s)",
+        "",
+        "## Committee Learning Memory",
+    ])
+    lines.extend(format_setup_learning_snapshot(feedback))
+    lines.extend([
         "",
         "## Trade/Action Map",
         f"- Action: {plan.get('action') or 'n/a'}",
@@ -224,7 +232,8 @@ def format_portfolio_committee_answer(
     account = ledger.get("account") or {}
     gate = data_health.get("gate") or {}
     expectancy = feedback.get("trade_expectancy") or {}
-    morning_candidates = morning.get("summary", {}) if isinstance(morning.get("summary"), dict) else {}
+    setup_learning = feedback.get("setup_review_learning") or {}
+    morning_candidates = morning_summary_counts(morning)
 
     lines = [
         "# Committee Answer",
@@ -245,21 +254,45 @@ def format_portfolio_committee_answer(
         f"- Risk: open risk is {format_money(account.get('open_risk'))}; buying power is {format_money(account.get('buying_power'))}.",
         f"- Data Quality: score {data_health.get('data_quality_score')}/100; gate {gate.get('status')}.",
         f"- Feedback Loop: closed trades {feedback.get('closed_trades_count')}; win rate {format_number(expectancy.get('win_rate'))}%; average R {format_number(expectancy.get('avg_r'))}.",
-        f"- Morning Brief: paper candidates {morning_candidates.get('paper_trade_candidates', 'n/a')}; conditional setups {morning_candidates.get('conditional_setups', 'n/a')}.",
+        f"- Setup Learning: score {format_number(setup_learning.get('learning_score'))}/100; "
+        f"Target 1 hit rate {format_number(setup_learning.get('target_1_hit_rate'))}%; "
+        f"Stop-first rate {format_number(setup_learning.get('stop_first_rate'))}%.",
+        f"- Morning Brief: paper candidates {morning_candidates['paper_trade_candidates']}; conditional setups {morning_candidates['conditional_setups']}.",
+        "",
+        "## Committee Learning Memory",
+    ]
+    lines.extend(format_setup_learning_snapshot(feedback))
+    lines.extend([
         "",
         "## What This Teaches The System",
-    ]
+    ])
     lines.extend([f"- {item}" for item in learning_notes] or ["- No learning notes generated."])
     return "\n".join(lines) + "\n"
 
 
-def build_ticker_learning_notes(cio_report, topic):
+def morning_summary_counts(morning):
+    morning = morning or {}
+    if isinstance(morning.get("summary"), dict):
+        summary = morning["summary"]
+        return {
+            "paper_trade_candidates": summary.get("paper_trade_candidates", 0),
+            "conditional_setups": summary.get("conditional_setups", 0),
+        }
+    return {
+        "paper_trade_candidates": len(morning.get("approved_simulated_trades", []) or []),
+        "conditional_setups": len(morning.get("conditional_setups", []) or []),
+    }
+
+
+def build_ticker_learning_notes(cio_report, topic, feedback=None):
     decision = cio_report.get("final_decision") or {}
     plan = cio_report.get("trade_plan") or {}
+    setup_learning = (feedback or {}).get("setup_review_learning") or {}
     notes = [
         f"Tag this question as `{topic}` so later outcomes can be compared against this kind of committee judgment.",
         f"Track whether the final status `{decision.get('status')}` was too conservative, too aggressive, or useful.",
     ]
+    notes.extend(setup_learning.get("lessons", [])[:3])
 
     if plan.get("suggested_entry"):
         notes.append(
@@ -269,6 +302,8 @@ def build_ticker_learning_notes(cio_report, topic):
         notes.append("Backtest sample is small, so the review should discount expectancy until more examples accumulate.")
     if cio_report.get("missing_information"):
         notes.append("Use the missing-information list as a data-quality improvement queue.")
+    if cio_report.get("alternative_data_stance") == "unavailable":
+        notes.append("Do not infer institutional/crowding support when Quiver alternative data is unavailable or not entitled.")
     return notes
 
 
@@ -285,6 +320,8 @@ def build_portfolio_learning_notes(macro_report, ledger, data_health, feedback, 
         notes.append("Compare open risk against later realized/unrealized P&L to improve portfolio sizing discipline.")
     if feedback.get("closed_trades_count", 0) == 0:
         notes.append("No closed simulated trades yet, so feedback is still mostly setup-review based rather than trade-outcome based.")
+    setup_learning = feedback.get("setup_review_learning") or {}
+    notes.extend(setup_learning.get("lessons", [])[:3])
     return notes
 
 
@@ -443,12 +480,55 @@ def compact_cio_snapshot(cio_report):
         "risk_decision": cio_report.get("risk_decision"),
         "news_stance": cio_report.get("news_stance"),
         "options_stance": cio_report.get("options_stance"),
+        "alternative_data_stance": cio_report.get("alternative_data_stance"),
+        "alternative_data_summary": cio_report.get("alternative_data_summary"),
         "backtest_expectancy": cio_report.get("backtest_expectancy"),
         "final_decision": cio_report.get("final_decision"),
         "trade_plan": cio_report.get("trade_plan"),
         "disagreements": cio_report.get("disagreements"),
         "missing_information": cio_report.get("missing_information"),
     }
+
+
+def compact_feedback_snapshot(feedback):
+    setup_learning = feedback.get("setup_review_learning") or {}
+    return {
+        "trade_expectancy": feedback.get("trade_expectancy"),
+        "closed_trades_count": feedback.get("closed_trades_count"),
+        "linked_trades_count": feedback.get("linked_trades_count"),
+        "setup_review_learning": {
+            "reviewed_setups": setup_learning.get("reviewed_setups"),
+            "entries_triggered": setup_learning.get("entries_triggered"),
+            "target_1_hit_rate": setup_learning.get("target_1_hit_rate"),
+            "stop_first_rate": setup_learning.get("stop_first_rate"),
+            "avg_entered_pnl_pct": setup_learning.get("avg_entered_pnl_pct"),
+            "learning_score": setup_learning.get("learning_score"),
+            "read": setup_learning.get("read"),
+            "lessons": setup_learning.get("lessons", [])[:5],
+        },
+    }
+
+
+def format_setup_learning_snapshot(feedback):
+    if not feedback:
+        return ["- No setup-review feedback loaded."]
+
+    setup_learning = feedback.get("setup_review_learning") or {}
+    if not setup_learning.get("reviewed_setups"):
+        return ["- No setup-review memory available yet."]
+
+    lines = [
+        f"- Learning score: {format_number(setup_learning.get('learning_score'))}/100",
+        f"- Reviewed setups: {setup_learning.get('reviewed_setups')}",
+        f"- Entries triggered: {setup_learning.get('entries_triggered')}",
+        f"- Target 1 hit rate: {format_number(setup_learning.get('target_1_hit_rate'))}%",
+        f"- Stop-first rate: {format_number(setup_learning.get('stop_first_rate'))}%",
+        f"- Average entered P&L: {format_number(setup_learning.get('avg_entered_pnl_pct'))}%",
+        f"- Read: {setup_learning.get('read')}",
+    ]
+    for lesson in setup_learning.get("lessons", [])[:5]:
+        lines.append(f"- Lesson: {lesson}")
+    return lines
 
 
 def save_committee_question_report(report):

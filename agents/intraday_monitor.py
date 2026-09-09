@@ -10,7 +10,7 @@ from agents.position_manager import (
     format_position_manager_report,
     generate_position_manager_report,
 )
-from data.paper_fills import format_paper_fill_report, process_paper_fills
+from data.paper_fills import fetch_price_snapshot, format_paper_fill_report, process_paper_fills
 from data.trade_journal import load_trade_journal, normalize_status
 from delivery.email_delivery import load_email_config, send_email
 from memory.research_memory import save_agent_report
@@ -20,6 +20,8 @@ from security.checks import redact_text
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports" / "intraday_monitor"
 ALERT_STATE_PATH = REPORTS_DIR / "alert_state.json"
+ENTRY_TRIGGER_LOG_PATH = REPORTS_DIR / "entry_trigger_log.json"
+MORNING_BRIEF_JSON_PATH = PROJECT_ROOT / "reports" / "morning_brief" / "daily_morning_brief.json"
 EASTERN = ZoneInfo("America/New_York")
 ACTION_ALERTS = {
     "EXIT",
@@ -57,18 +59,21 @@ def run_intraday_monitor(send_alert=True, dry_run=False, apply_fills=False, save
     created_at = datetime.now(EASTERN).isoformat(timespec="seconds")
     run_id = f"{date.today().isoformat()}-intraday-monitor"
 
-    fill_result = process_paper_fills(apply=apply_fills)
+    fill_result = process_paper_fills(apply=apply_fills, allow_entry_fills=False)
     position_report = generate_position_manager_report(use_llm=False, save_memory=False)
     market_report = generate_daily_market_intelligence()
     symbols = active_symbols()
+    entry_trigger_check = check_morning_brief_entry_triggers()
     news_reports = collect_news_for_symbols(symbols)
 
     alerts = []
     alerts.extend(build_fill_alerts(fill_result))
+    alerts.extend(entry_trigger_check["alerts"])
     alerts.extend(build_position_alerts(position_report))
     alerts.extend(build_market_alerts(market_report))
     alerts.extend(build_news_alerts(news_reports))
     alerts = dedupe_alerts(alerts)
+    checked_symbols = sorted(set(symbols + entry_trigger_check["checked_symbols"]))
 
     state = load_alert_state()
     new_alerts = [alert for alert in alerts if alert["alert_id"] not in state["sent_alert_ids"]]
@@ -83,7 +88,8 @@ def run_intraday_monitor(send_alert=True, dry_run=False, apply_fills=False, save
         "send_alert": send_alert,
         "dry_run": dry_run,
         "apply_fills": apply_fills,
-        "checked_symbols": symbols,
+        "entry_policy": "alert_only_for_new_entries",
+        "checked_symbols": checked_symbols,
         "alert_count": len(alerts),
         "new_alert_count": len(new_alerts),
         "alerts": alerts,
@@ -92,7 +98,16 @@ def run_intraday_monitor(send_alert=True, dry_run=False, apply_fills=False, save
         "paper_fill_check": {
             "applied": fill_result.get("applied"),
             "events": fill_result.get("events", []),
+            "applied_events": fill_result.get("applied_events", []),
             "checked_symbols": fill_result.get("checked_symbols", []),
+            "allow_entry_fills": fill_result.get("allow_entry_fills", True),
+            "allow_exit_fills": fill_result.get("allow_exit_fills", True),
+        },
+        "entry_trigger_check": {
+            "source": entry_trigger_check["source"],
+            "checked_symbols": entry_trigger_check["checked_symbols"],
+            "triggered": entry_trigger_check["triggered"],
+            "status": entry_trigger_check["status"],
         },
         "market": market_report,
         "news": news_reports,
@@ -101,6 +116,7 @@ def run_intraday_monitor(send_alert=True, dry_run=False, apply_fills=False, save
 
     output_path = save_intraday_monitor_report(report)
     report["report_path"] = str(output_path)
+    save_entry_trigger_log(entry_trigger_check["triggered"])
 
     if send_alert and new_alerts:
         subject = build_subject(new_alerts)
@@ -145,6 +161,126 @@ def active_symbols():
     return sorted(set(symbols))
 
 
+def check_morning_brief_entry_triggers():
+    ideas = load_morning_brief_entry_ideas()
+    if not ideas:
+        return {
+            "source": str(MORNING_BRIEF_JSON_PATH),
+            "status": "no_setups",
+            "checked_symbols": [],
+            "triggered": [],
+            "alerts": [],
+        }
+
+    journal_keys = planned_journal_keys()
+    filtered = [
+        idea for idea in ideas
+        if (idea.get("run_id") and idea.get("run_id") not in journal_keys["run_ids"])
+        and (idea.get("symbol") and idea.get("symbol") not in journal_keys["symbols"])
+    ]
+    symbols = sorted({idea["symbol"] for idea in filtered})
+    price_snapshot = fetch_price_snapshot(symbols)
+    prices = price_snapshot.get("prices", {})
+    metadata = price_snapshot.get("metadata", {})
+    alerts = []
+    triggered = []
+
+    for idea in filtered:
+        symbol = idea["symbol"]
+        latest = safe_float(prices.get(symbol))
+        threshold = safe_float(idea.get("suggested_entry") or idea.get("entry_trigger"))
+        if latest <= 0 or threshold <= 0:
+            continue
+
+        side = str(idea.get("side") or "long").lower().strip()
+        hit = latest <= threshold if side != "short" else latest >= threshold
+        if not hit:
+            continue
+
+        event = {
+            "event_type": "entry_triggered",
+            "symbol": symbol,
+            "side": side,
+            "run_id": idea.get("run_id"),
+            "decision": idea.get("decision"),
+            "latest_price": round_number(latest),
+            "entry_threshold": round_number(threshold),
+            "entry_trigger": round_number(idea.get("entry_trigger")),
+            "suggested_entry": round_number(idea.get("suggested_entry")),
+            "stop": round_number(idea.get("stop")),
+            "target_1": round_number(idea.get("target_1")),
+            "score": round_number(idea.get("score")),
+            "reason": idea.get("reason"),
+            "price_metadata": metadata.get(symbol, {}),
+            "timestamp": datetime.now(EASTERN).isoformat(timespec="seconds"),
+            "action_required": "Review in dashboard; no simulated position was opened automatically.",
+        }
+        triggered.append(event)
+        alerts.append(build_alert(
+            kind="entry_trigger",
+            severity="high",
+            symbol=symbol,
+            title=f"{symbol} entry triggered - approval needed",
+            message=(
+                f"{symbol} hit the entry threshold near {threshold:.2f}; latest price {latest:.2f}. "
+                "No simulated position was opened automatically."
+            ),
+            payload=event,
+            dedupe_key=f"{date.today().isoformat()}|entry_trigger|{symbol}|{idea.get('run_id')}|{threshold:.4f}",
+        ))
+
+    return {
+        "source": str(MORNING_BRIEF_JSON_PATH),
+        "status": price_snapshot.get("provider_status", "checked"),
+        "checked_symbols": symbols,
+        "triggered": triggered,
+        "alerts": alerts,
+    }
+
+
+def load_morning_brief_entry_ideas():
+    if not MORNING_BRIEF_JSON_PATH.exists():
+        return []
+    try:
+        report = json.loads(MORNING_BRIEF_JSON_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+
+    ideas = []
+    seen = set()
+    for bucket in ("approved_simulated_trades", "conditional_setups"):
+        for idea in report.get(bucket, []) or []:
+            symbol = str(idea.get("symbol", "")).upper().strip()
+            if not symbol:
+                continue
+            run_id = str(idea.get("run_id") or f"{bucket}-{symbol}")
+            key = (symbol, run_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            current = dict(idea)
+            current["symbol"] = symbol
+            current["run_id"] = run_id
+            ideas.append(current)
+    return ideas
+
+
+def planned_journal_keys():
+    frame = load_trade_journal()
+    run_ids = set()
+    symbols = set()
+    for _, row in frame.iterrows():
+        if normalize_status(row.get("status")) != "planned":
+            continue
+        symbol = str(row.get("symbol", "")).upper().strip()
+        run_id = str(row.get("agent_run_id", "")).strip()
+        if symbol:
+            symbols.add(symbol)
+        if run_id:
+            run_ids.add(run_id)
+    return {"symbols": symbols, "run_ids": run_ids}
+
+
 def collect_news_for_symbols(symbols):
     reports = []
     for symbol in symbols:
@@ -175,6 +311,23 @@ def collect_news_for_symbols(symbols):
 def build_fill_alerts(fill_result):
     alerts = []
     for event in fill_result.get("events", []):
+        if event.get("event_type") == "entry_fill":
+            alerts.append(build_alert(
+                kind="entry_trigger",
+                severity="high",
+                symbol=event.get("symbol"),
+                title=f"{event.get('symbol')} planned entry triggered - approval needed",
+                message=(
+                    f"Planned entry hit at {event.get('fill_price')} "
+                    f"(latest {event.get('latest_price')}); no simulated position was opened automatically."
+                ),
+                payload=event,
+                dedupe_key=(
+                    f"{date.today().isoformat()}|planned_entry_trigger|"
+                    f"{event.get('symbol')}|{event.get('trade_id')}|{event.get('fill_price')}"
+                ),
+            ))
+            continue
         severity = "high" if event.get("event_type") == "exit_fill" else "medium"
         alerts.append(build_alert(
             kind="paper_fill",
@@ -285,8 +438,8 @@ def best_news_item(items):
     return max(relevant, key=lambda item: item.get("relevance_score", 0))
 
 
-def build_alert(kind, severity, symbol, title, message, payload):
-    raw_id = "|".join([
+def build_alert(kind, severity, symbol, title, message, payload, dedupe_key=None):
+    raw_id = dedupe_key or "|".join([
         date.today().isoformat(),
         str(kind),
         str(symbol or ""),
@@ -342,9 +495,13 @@ def create_intraday_email_body(report):
         "Paper Fill Check",
         format_paper_fill_report(report["paper_fill_check"]),
         "",
+        "Entry Trigger Check",
+        format_entry_trigger_check(report["entry_trigger_check"]),
+        "",
         "Guardrails",
         "- This is a watch-only/paper-trading alert, not a live trade instruction.",
         "- Review the dashboard before acting.",
+        "- New entry triggers are alert-only and require human approval.",
         "- Alerts are deduped so the same event should not email repeatedly today.",
     ])
     return "\n".join(lines) + "\n"
@@ -387,6 +544,27 @@ def format_intraday_monitor_report(report):
         for alert in report["alerts"]:
             lines.append(f"- [{alert['severity'].upper()}] {alert['kind']} {alert['symbol']}: {alert['message']}")
 
+    lines.extend(["", "## Entry Trigger Check", format_entry_trigger_check(report.get("entry_trigger_check") or {})])
+
+    return "\n".join(lines)
+
+
+def format_entry_trigger_check(check):
+    lines = [
+        f"Source: {check.get('source', 'n/a')}",
+        f"Status: {check.get('status', 'n/a')}",
+        f"Symbols Checked: {len(check.get('checked_symbols', []))}",
+        f"Entry Triggers: {len(check.get('triggered', []))}",
+    ]
+    triggered = check.get("triggered") or []
+    if not triggered:
+        lines.append("No entry thresholds were hit.")
+        return "\n".join(lines)
+    for event in triggered:
+        lines.append(
+            "- {symbol}: latest {latest_price}, threshold {entry_threshold}, stop {stop}, "
+            "target {target_1}; approval required.".format(**event)
+        )
     return "\n".join(lines)
 
 
@@ -442,6 +620,39 @@ def save_alert_state(state):
     ALERT_STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
+def save_entry_trigger_log(triggered):
+    if not triggered:
+        return
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    existing = []
+    if ENTRY_TRIGGER_LOG_PATH.exists():
+        try:
+            existing = json.loads(ENTRY_TRIGGER_LOG_PATH.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            existing = []
+    existing_ids = {
+        f"{item.get('symbol')}|{item.get('run_id')}|{item.get('entry_threshold')}|{item.get('timestamp', '')[:10]}"
+        for item in existing
+    }
+    for event in triggered:
+        event_id = f"{event.get('symbol')}|{event.get('run_id')}|{event.get('entry_threshold')}|{event.get('timestamp', '')[:10]}"
+        if event_id not in existing_ids:
+            existing.append(event)
+            existing_ids.add(event_id)
+    ENTRY_TRIGGER_LOG_PATH.write_text(json.dumps(existing[-1000:], indent=2, default=str), encoding="utf-8")
+
+
+def safe_float(value):
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def round_number(value):
+    return round(safe_float(value), 4)
+
+
 def summarize_for_memory(report):
     return {
         "agent": report["agent"],
@@ -450,6 +661,8 @@ def summarize_for_memory(report):
         "checked_symbols": report["checked_symbols"],
         "alert_count": report["alert_count"],
         "new_alert_count": report["new_alert_count"],
+        "entry_policy": report.get("entry_policy"),
+        "entry_triggers": report.get("entry_trigger_check", {}).get("triggered", []),
         "alerts": [
             {
                 "kind": alert["kind"],

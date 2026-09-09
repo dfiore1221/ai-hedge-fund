@@ -9,6 +9,10 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import pandas as pd
 import streamlit as st
 import yfinance as yf
@@ -31,6 +35,11 @@ from agents.position_manager import (
     generate_position_manager_report,
     save_position_manager_report,
 )
+from agents.portfolio_governor import (
+    format_portfolio_governor_report,
+    generate_portfolio_governor_report,
+    save_portfolio_governor_report,
+)
 from agents.core_etf_sleeve import (
     approve_core_rebalance_from_brief,
     build_core_rebalance_approval_id,
@@ -43,6 +52,12 @@ from agents.options_readiness import (
     format_options_readiness_report,
     generate_options_readiness_report,
     save_options_readiness_report,
+)
+from agents.paper_lab import (
+    build_options_contract_plan,
+    format_paper_lab_report,
+    generate_paper_lab_report,
+    save_paper_lab_report,
 )
 from data.data_quality import generate_data_health_report
 from data.options_journal import (
@@ -72,8 +87,6 @@ from memory.research_memory import (
 )
 from security.checks import build_security_report, redact_text
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = PROJECT_ROOT / "memory" / "hedge_fund_memory.db"
 WATCHLIST_PATH = PROJECT_ROOT / "framework" / "watchlist.json"
 MORNING_BRIEF_PATH = PROJECT_ROOT / "reports" / "morning_brief" / "daily_morning_brief.md"
@@ -103,6 +116,8 @@ def main():
         "Watchlist",
         "Simulated Trades",
         "Position Manager",
+        "Portfolio Governor",
+        "Paper Lab",
         "Options Readiness",
         "Feedback Loop",
         "Ask Committee",
@@ -124,16 +139,20 @@ def main():
     with tabs[5]:
         render_position_manager()
     with tabs[6]:
-        render_options_readiness()
+        render_portfolio_governor()
     with tabs[7]:
-        render_feedback_loop()
+        render_paper_lab()
     with tabs[8]:
-        render_ask_committee()
+        render_options_readiness()
     with tabs[9]:
-        render_agent_debate()
+        render_feedback_loop()
     with tabs[10]:
-        render_research_memory()
+        render_ask_committee()
     with tabs[11]:
+        render_agent_debate()
+    with tabs[12]:
+        render_research_memory()
+    with tabs[13]:
         render_settings()
 
 
@@ -556,8 +575,10 @@ def render_trade_journal():
         if apply_fills:
             st.rerun()
 
-    journal = enrich_trade_metrics(load_trade_journal(), refresh_prices=refresh_prices)
+    journal = enrich_trade_metrics(load_trade_journal(), refresh_prices=True)
     if refresh_prices:
+        st.success("Open trade prices refreshed.")
+    if not journal.empty:
         save_trade_journal(journal)
     summary = summarize_trade_journal(journal)
     ledger = build_paper_ledger(journal)
@@ -614,13 +635,13 @@ def render_trade_journal():
         f"Week realized: {money(summary['week_realized_pnl'])}"
     )
 
-    st.markdown("#### Positions")
+    st.markdown("#### Position Summary")
     positions = pd.DataFrame(ledger["positions"])
     if positions.empty:
         st.info("No open simulated positions.")
     else:
         st.dataframe(
-            positions[[
+            safe_display_frame(positions, [
                 "symbol",
                 "side",
                 "quantity",
@@ -630,10 +651,51 @@ def render_trade_journal():
                 "unrealized_pnl",
                 "planned_risk",
                 "lots",
-            ]],
+            ], numeric_columns=[
+                "quantity",
+                "average_cost",
+                "last_price",
+                "market_value",
+                "unrealized_pnl",
+                "planned_risk",
+                "lots",
+            ]),
             hide_index=True,
             width="stretch",
         )
+
+    lots = pd.DataFrame(ledger.get("lots", []))
+    with st.expander("Position Lots / Audit Detail", expanded=False):
+        if lots.empty:
+            st.info("No open lots.")
+        else:
+            st.caption("Individual fills are preserved here; the summary above is the cleaner rolled-up view.")
+            st.dataframe(
+                safe_display_frame(lots, [
+                    "trade_id",
+                    "opened_at",
+                    "symbol",
+                    "side",
+                    "quantity",
+                    "entry",
+                    "last_price",
+                    "market_value",
+                    "unrealized_pnl",
+                    "stop",
+                    "target",
+                    "source",
+                ], numeric_columns=[
+                    "quantity",
+                    "entry",
+                    "last_price",
+                    "market_value",
+                    "unrealized_pnl",
+                    "stop",
+                    "target",
+                ]),
+                hide_index=True,
+                width="stretch",
+            )
 
     st.markdown("#### Ledger Transactions")
     transactions = pd.DataFrame(ledger["transactions"])
@@ -641,7 +703,7 @@ def render_trade_journal():
         st.info("No simulated account transactions yet.")
     else:
         st.dataframe(
-            transactions[[
+            safe_display_frame(transactions, [
                 "timestamp",
                 "action",
                 "symbol",
@@ -652,7 +714,13 @@ def render_trade_journal():
                 "cash_delta",
                 "cash_balance",
                 "trade_id",
-            ]].tail(100),
+            ], numeric_columns=[
+                "quantity",
+                "price",
+                "gross_amount",
+                "cash_delta",
+                "cash_balance",
+            ]).tail(100),
             hide_index=True,
             width="stretch",
         )
@@ -741,7 +809,7 @@ def render_trade_journal():
         st.info("No open or planned simulated trades.")
     else:
         st.dataframe(
-            open_trades[[
+            safe_display_frame(open_trades, [
                 "id",
                 "symbol",
                 "side",
@@ -755,7 +823,15 @@ def render_trade_journal():
                 "current_price",
                 "unrealized_pnl",
                 "source",
-            ]],
+            ], numeric_columns=[
+                "entry",
+                "stop",
+                "target",
+                "shares",
+                "planned_risk",
+                "current_price",
+                "unrealized_pnl",
+            ]),
             hide_index=True,
             width="stretch",
         )
@@ -765,7 +841,7 @@ def render_trade_journal():
         st.info("No closed simulated trades yet.")
     else:
         st.dataframe(
-            closed_trades[[
+            safe_display_frame(closed_trades, [
                 "id",
                 "symbol",
                 "side",
@@ -776,14 +852,20 @@ def render_trade_journal():
                 "r_multiple",
                 "outcome",
                 "exit_reason",
-            ]],
+            ], numeric_columns=[
+                "entry",
+                "exit_price",
+                "shares",
+                "realized_pnl",
+                "r_multiple",
+            ]),
             hide_index=True,
             width="stretch",
         )
 
     st.markdown("#### Full Journal")
     edited = st.data_editor(
-        journal,
+        safe_editor_frame(journal),
         hide_index=True,
         width="stretch",
         num_rows="dynamic",
@@ -872,13 +954,14 @@ def render_options_readiness():
 
             col5, col6, col7, col8 = st.columns(4)
             expiration = col5.text_input("Expiration", placeholder="YYYY-MM-DD")
-            strike = col6.number_input("Strike", min_value=0.0, value=0.0)
-            entry_premium = col7.number_input("Entry Premium", min_value=0.0, value=0.0)
+            strike = col6.number_input("Long Strike", min_value=0.0, value=0.0)
+            short_strike = col7.number_input("Short Strike", min_value=0.0, value=0.0)
             contracts = col8.number_input("Contracts", min_value=0, value=1)
 
-            col9, col10 = st.columns(2)
-            target_premium = col9.number_input("Target Premium", min_value=0.0, value=0.0)
-            stop_premium = col10.number_input("Stop Premium", min_value=0.0, value=0.0)
+            col9, col10, col11 = st.columns(3)
+            entry_premium = col9.number_input("Net Entry Premium", min_value=0.0, value=0.0)
+            target_premium = col10.number_input("Target Premium", min_value=0.0, value=0.0)
+            stop_premium = col11.number_input("Stop Premium", min_value=0.0, value=0.0)
 
             thesis = st.text_area("Thesis / Why", key="option_thesis")
             notes = st.text_area("Notes", key="option_notes")
@@ -899,6 +982,7 @@ def render_options_readiness():
                     "source": source,
                     "expiration": expiration,
                     "strike": strike,
+                    "short_strike": short_strike if short_strike else "",
                     "entry_premium": entry_premium,
                     "contracts": contracts,
                     "target_premium": target_premium if target_premium else "",
@@ -943,17 +1027,114 @@ def render_options_readiness():
         st.code(format_options_readiness_report(report), language="markdown")
 
 
+def render_paper_lab():
+    st.subheader("Paper Lab")
+    st.caption("Aggressive paper-only experiments. Main portfolio rules remain unchanged.")
+
+    controls = st.columns([1, 1, 2])
+    refresh = controls[0].button("Refresh Paper Lab", type="primary")
+    if refresh or "paper_lab_report" not in st.session_state:
+        with st.spinner("Building Paper Lab experiment slate..."):
+            report = generate_paper_lab_report()
+            save_paper_lab_report(report)
+            st.session_state["paper_lab_report"] = report
+
+    report = st.session_state["paper_lab_report"]
+    budget = report.get("budget", {})
+    summary = report.get("summary", {})
+    learning = report.get("learning_readout", {})
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Stance", summary.get("stance", "n/a"))
+    c2.metric("Lab Sleeve", money(budget.get("paper_lab_sleeve_value", 0)))
+    c3.metric("Max Risk / Idea", money(budget.get("max_single_experiment_risk", 0)))
+    c4.metric("Max Option Premium", money(budget.get("max_options_experiment_premium", 0)))
+
+    st.markdown("#### What The Committee Is Learning")
+    learn_cols = st.columns(4)
+    learn_cols[0].metric("Target 1 Hit Rate", f"{float(learning.get('target_1_hit_rate') or 0):.1f}%")
+    learn_cols[1].metric("Partial-Win Rate", f"{float(learning.get('partial_win_rate') or 0):.1f}%")
+    learn_cols[2].metric("Avg Entered P&L", f"{float(learning.get('average_entered_pnl') or 0):.2f}%")
+    learn_cols[3].metric("Avg R", f"{float(learning.get('average_r') or 0):.2f}")
+    for lesson in learning.get("lessons", []):
+        st.caption(f"- {lesson}")
+
+    left, right = st.columns([1, 1])
+    with left:
+        st.markdown("#### Stock Experiments")
+        stock_rows = report.get("stock_experiments", [])
+        if stock_rows:
+            st.dataframe(pd.DataFrame(stock_rows), hide_index=True, width="stretch")
+        else:
+            st.info("No stock experiments available from the current brief.")
+
+    with right:
+        st.markdown("#### Options / Fade Experiments")
+        option_rows = (report.get("options_experiments", []) or []) + (report.get("bearish_experiments", []) or [])
+        if option_rows:
+            st.dataframe(pd.DataFrame(option_rows), hide_index=True, width="stretch")
+        else:
+            st.info("No options experiments available from the current brief.")
+
+    with st.expander("Build Paper Options Contract Plan", expanded=False):
+        plan_cols = st.columns(4)
+        symbol = plan_cols[0].text_input("Symbol", value="", key="paper_lab_option_symbol").upper().strip()
+        strategy = plan_cols[1].selectbox(
+            "Strategy",
+            ["long_call", "long_put", "call_debit_spread", "put_debit_spread"],
+            key="paper_lab_option_strategy",
+        )
+        save_plan = plan_cols[2].checkbox("Save to options journal", value=False)
+        build_plan = plan_cols[3].button("Build Plan")
+        if build_plan:
+            if not symbol:
+                st.error("Symbol is required.")
+            else:
+                with st.spinner("Checking starter options chain..."):
+                    plan = build_options_contract_plan(symbol, strategy=strategy, save=save_plan)
+                if plan.get("status") == "unavailable":
+                    st.warning(plan.get("reason", "No usable contract plan found."))
+                elif plan.get("status") == "preview_over_budget":
+                    st.warning(plan.get("budget_warning", "Contract is over Paper Lab budget."))
+                else:
+                    st.success("Paper options plan created." if save_plan else "Paper options plan preview created.")
+                if plan.get("status") != "unavailable":
+                    st.json({
+                        "symbol": plan.get("symbol"),
+                        "strategy": plan.get("strategy"),
+                        "expiration": plan.get("expiration"),
+                        "strike": plan.get("strike"),
+                        "short_strike": plan.get("short_strike"),
+                        "entry_premium": plan.get("entry_premium"),
+                        "target_premium": plan.get("target_premium"),
+                        "stop_premium": plan.get("stop_premium"),
+                        "max_loss": plan.get("max_loss"),
+                        "premium_cap": plan.get("max_options_experiment_premium"),
+                        "budget_warning": plan.get("budget_warning"),
+                        "reason": plan.get("reason"),
+                        "trade_id": plan.get("trade_id"),
+                    })
+
+    with st.expander("Full Paper Lab Report", expanded=False):
+        st.code(format_paper_lab_report(report), language="markdown")
+
+
 def render_position_manager():
     st.subheader("Position Manager")
     st.caption("Daily paper-trade supervision: active positions, planned orders, stops, targets, and time-stop review.")
 
-    col1, col2, col3 = st.columns([1, 1, 3])
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
     use_llm = col2.checkbox(
         "Use OpenAI CIO summary for this run",
         value=False,
         help="Optional. The deterministic summary still runs if the API call is unavailable.",
     )
-    dry_run_alert = col3.checkbox(
+    local_mode = col3.checkbox(
+        "Local prices only",
+        value=False,
+        help="Uses stored journal prices and skips external price/ATR refresh. Useful when live provider calls are blocked.",
+    )
+    dry_run_alert = col4.checkbox(
         "Dry-run intraday email",
         value=True,
         help="Preview intraday alert email behavior without sending.",
@@ -962,7 +1143,10 @@ def render_position_manager():
     if col1.button("Run Position Manager", type="primary"):
         with st.spinner("Reviewing open and planned simulated trades..."):
             try:
-                report = generate_position_manager_report(use_llm=use_llm)
+                report = generate_position_manager_report(
+                    use_llm=use_llm,
+                    refresh_market_data=not local_mode,
+                )
                 output_path = save_position_manager_report(report)
                 st.success(f"Position manager report saved: {output_path}")
                 st.code(format_position_manager_report(report), language="markdown")
@@ -1032,6 +1216,115 @@ def render_position_manager():
         st.dataframe(display, hide_index=True, width="stretch")
 
 
+def render_portfolio_governor():
+    st.subheader("Portfolio Governor")
+    st.caption("Whole-account policy controls: exposure, rebalance rules, drawdown, attribution, and paper execution friction.")
+
+    if st.button("Run Portfolio Governor", type="primary"):
+        with st.spinner("Building professional portfolio controls report..."):
+            try:
+                report = generate_portfolio_governor_report()
+                output_path = save_portfolio_governor_report(report)
+                st.success(f"Portfolio governor report saved: {output_path}")
+                st.code(format_portfolio_governor_report(report), language="markdown")
+            except Exception as exc:
+                st.error(redact_text(str(exc)))
+
+    latest_path = PROJECT_ROOT / "reports" / "portfolio_governor" / "portfolio_governor.json"
+    if not latest_path.exists():
+        st.info("No portfolio governor report found yet. Run it to populate this page.")
+        return
+
+    try:
+        report = json.loads(latest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        st.error("The latest portfolio governor report could not be read.")
+        return
+
+    try:
+        report = generate_portfolio_governor_report(
+            save_memory=False,
+            refresh_market_data=False,
+            persist_prices=False,
+        )
+    except Exception as exc:
+        st.warning(f"Showing latest saved Portfolio Governor report. Live dashboard sync failed: {redact_text(str(exc))}")
+
+    status = report.get("status", {})
+    account = report.get("account", {})
+    exposure = report.get("exposure", {})
+    controls = report.get("risk_controls", {})
+    core_rules = report.get("core_rebalance_rules", {})
+    attribution = report.get("attribution", {})
+    costs = report.get("cost_model", {})
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Stance", str(status.get("stance", "unknown")).replace("_", " ").title())
+    c2.metric("Confidence", f"{status.get('confidence_score', 0)}/100")
+    c3.metric("Net Liq", money(account.get("net_liquidation_value", 0)))
+    c4.metric("Cash", money(account.get("cash_balance", 0)))
+    c5.metric("Gross Exposure", money(exposure.get("gross_exposure", 0)))
+    c6.metric("Open Risk", money(account.get("open_risk", 0)))
+
+    st.markdown("#### Core ETF Sleeve Rules")
+    core_cols = st.columns(5)
+    core_cols[0].metric("Action", str(core_rules.get("action", "n/a")).replace("_", " ").title())
+    core_cols[1].metric("Target", money(core_rules.get("target_value", 0)))
+    core_cols[2].metric("Current", money(core_rules.get("current_value", 0)))
+    core_cols[3].metric("Drift", money(core_rules.get("drift_value", 0)))
+    core_cols[4].metric("Band", pct_text(core_rules.get("rebalance_band_pct", 0)))
+    st.caption(core_rules.get("message", ""))
+
+    st.markdown("#### Exposure Map")
+    bucket = pd.DataFrame(exposure.get("by_bucket", []))
+    category = pd.DataFrame(exposure.get("by_category", []))
+    symbol = pd.DataFrame(exposure.get("by_symbol", []))
+    if not bucket.empty:
+        st.dataframe(bucket, hide_index=True, width="stretch")
+    if not category.empty:
+        with st.expander("Sector / Category Exposure"):
+            st.dataframe(category, hide_index=True, width="stretch")
+    if not symbol.empty:
+        with st.expander("Position-Level Exposure"):
+            st.dataframe(symbol, hide_index=True, width="stretch")
+
+    st.markdown("#### Risk Rules")
+    issues = pd.DataFrame(controls.get("issues", []))
+    if issues.empty:
+        st.success("No portfolio-level rule breaches.")
+    else:
+        st.dataframe(issues, hide_index=True, width="stretch")
+    for warning in controls.get("warnings", []):
+        st.warning(warning)
+
+    st.markdown("#### Attribution")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Realized P&L", money(attribution.get("realized_pnl", 0)))
+    c2.metric("Unrealized P&L", money(attribution.get("unrealized_pnl", 0)))
+    c3.metric("Total P&L", money(attribution.get("total_pnl", 0)))
+    source_attr = pd.DataFrame(attribution.get("by_source", []))
+    setup_attr = pd.DataFrame(attribution.get("by_setup_type", []))
+    if not source_attr.empty:
+        with st.expander("Attribution by Source"):
+            st.dataframe(source_attr, hide_index=True, width="stretch")
+    if not setup_attr.empty:
+        with st.expander("Attribution by Setup Type"):
+            st.dataframe(setup_attr, hide_index=True, width="stretch")
+
+    st.markdown("#### Friction / Modeling")
+    st.write(
+        f"Estimated execution friction: {money(costs.get('estimated_total_costs', 0))}. "
+        f"Equities use {costs.get('slippage_bps_equity')} bps slippage plus "
+        f"{costs.get('spread_bps_equity')} bps spread; ETFs use "
+        f"{costs.get('slippage_bps_etf')} bps plus {costs.get('spread_bps_etf')} bps."
+    )
+    st.caption(f"Dividend model: {costs.get('dividend_model')} | Tax model: {costs.get('tax_model')}")
+
+    st.markdown("#### Action Plan")
+    for item in report.get("action_plan", []):
+        st.write(f"- {item}")
+
+
 def render_agent_debate():
     st.subheader("Agent Debate")
     reports = load_agent_reports()
@@ -1094,6 +1387,19 @@ def render_feedback_loop():
         st.info("No linked closed trades yet. Add agent run IDs to journal entries and close trades to score agents.")
     else:
         st.dataframe(agent_scorecard, hide_index=True, width="stretch")
+
+    setup_learning = report.get("setup_review_learning") or {}
+    st.markdown("#### Committee Learning Score")
+    l1, l2, l3, l4, l5, l6 = st.columns(6)
+    l1.metric("Learning Score", f"{setup_learning.get('learning_score', 0):.1f}/100")
+    l2.metric("Reviewed Setups", setup_learning.get("reviewed_setups", 0))
+    l3.metric("Target 1 Rate", f"{setup_learning.get('target_1_hit_rate', 0):.1f}%")
+    l4.metric("Partial-Win Rate", f"{setup_learning.get('partial_win_rate', 0):.1f}%")
+    l5.metric("Stop-First Rate", f"{setup_learning.get('stop_first_rate', 0):.1f}%")
+    l6.metric("Avg Entry P&L", f"{setup_learning.get('avg_entered_pnl_pct', 0):.2f}%")
+    st.caption(setup_learning.get("read", "No setup-review memory available yet."))
+    for lesson in setup_learning.get("lessons", [])[:5]:
+        st.write(f"- {lesson}")
 
     left, right = st.columns(2)
     with left:
@@ -1263,6 +1569,7 @@ def render_settings():
     security_report = build_security_report()
     st.write(f"Required checks passed: `{security_report['passed']}`")
     st.write(f"Dashboard passcode: `{env_display('DASHBOARD_PASSCODE')}`")
+    st.write(f"Dashboard passcode required: `{dashboard_passcode_required()}`")
     st.write(f"Email allowlist: `{env_display('APPROVED_EMAIL_RECIPIENTS')}`")
     if security_report["blockers"]:
         st.error("Security blockers found. Run `python3 main.py security check` for details.")
@@ -1273,9 +1580,12 @@ def render_settings():
 
 
 def require_dashboard_auth():
+    if not dashboard_passcode_required():
+        return True
+
     passcode = os.getenv("DASHBOARD_PASSCODE", "").strip()
     if not passcode:
-        st.warning("Dashboard passcode is not set. Add DASHBOARD_PASSCODE to .env to lock this cockpit.")
+        st.warning("Dashboard passcode protection is enabled, but DASHBOARD_PASSCODE is not set.")
         return True
 
     if st.session_state.get("dashboard_authenticated"):
@@ -1290,6 +1600,11 @@ def require_dashboard_auth():
         st.error("Incorrect passcode.")
 
     return False
+
+
+def dashboard_passcode_required():
+    value = os.getenv("DASHBOARD_REQUIRE_PASSCODE", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def env_display(key):
@@ -1505,6 +1820,32 @@ def format_percent_display(value):
     return f"{value:.1f}%"
 
 
+def safe_display_frame(frame, columns, numeric_columns=None):
+    """Prepare mixed CSV-backed data for Streamlit tables."""
+    numeric_columns = set(numeric_columns or [])
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=columns)
+
+    table = frame.copy()
+    for column in columns:
+        if column not in table.columns:
+            table[column] = ""
+
+    table = table[columns].copy()
+    for column in columns:
+        if column in numeric_columns:
+            table[column] = pd.to_numeric(table[column], errors="coerce")
+        else:
+            table[column] = table[column].fillna("").astype(str)
+    return table
+
+
+def safe_editor_frame(frame):
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    return frame.fillna("").astype(str)
+
+
 def flatten_trade_health(frame):
     rows = []
     for _, trade in frame.iterrows():
@@ -1543,6 +1884,13 @@ def load_data_health(live_checks=True, live_check_limit=12):
 
 def money(value):
     return f"${format_number(value)}"
+
+
+def pct_text(value):
+    try:
+        return f"{float(value) * 100:.1f}%"
+    except (TypeError, ValueError):
+        return "0.0%"
 
 
 if __name__ == "__main__":

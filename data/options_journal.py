@@ -23,6 +23,7 @@ OPTIONS_COLUMNS = [
     "option_type",
     "expiration",
     "strike",
+    "short_strike",
     "contracts",
     "multiplier",
     "entry_premium",
@@ -31,6 +32,7 @@ OPTIONS_COLUMNS = [
     "target_premium",
     "stop_premium",
     "max_loss",
+    "max_profit",
     "break_even",
     "premium_paid",
     "unrealized_pnl",
@@ -127,6 +129,7 @@ def enrich_options_metrics(frame):
         option_type = normalize_option_type(row.get("option_type"), strategy)
         status = normalize_status(row.get("status"))
         strike = to_float(row.get("strike"))
+        short_strike = to_float(row.get("short_strike"))
         contracts = to_float(row.get("contracts"))
         multiplier = to_float(row.get("multiplier")) or CONTRACT_MULTIPLIER
         entry = to_float(row.get("entry_premium"))
@@ -135,9 +138,11 @@ def enrich_options_metrics(frame):
 
         premium_paid = entry * contracts * multiplier if entry and contracts else 0
         max_loss = premium_paid
-        break_even = calculate_break_even(option_type, strike, entry)
+        max_profit = calculate_max_profit(strategy, strike, short_strike, entry, contracts, multiplier)
+        break_even = calculate_break_even(strategy, option_type, strike, entry)
         frame.at[index, "premium_paid"] = round_number(premium_paid)
         frame.at[index, "max_loss"] = round_number(max_loss)
+        frame.at[index, "max_profit"] = round_number(max_profit)
         frame.at[index, "break_even"] = round_number(break_even)
 
         if status in OPTIONS_OPEN_STATUSES and current and entry and contracts:
@@ -240,12 +245,30 @@ def normalize_frame(frame):
     return frame[OPTIONS_COLUMNS]
 
 
-def calculate_break_even(option_type, strike, premium):
+def calculate_break_even(strategy, option_type, strike, premium):
     if not strike or not premium:
         return 0
-    if option_type == "put":
+    if strategy == "put_debit_spread" or option_type == "put":
         return strike - premium
     return strike + premium
+
+
+def calculate_max_profit(strategy, strike, short_strike, premium, contracts, multiplier):
+    if not contracts or not premium:
+        return 0
+    if strategy not in {"call_debit_spread", "put_debit_spread"}:
+        return ""
+    if not strike or not short_strike:
+        return ""
+
+    if strategy == "call_debit_spread":
+        width = short_strike - strike
+    else:
+        width = strike - short_strike
+
+    if width <= 0:
+        return 0
+    return max(0, (width - premium) * contracts * multiplier)
 
 
 def normalize_strategy(value):

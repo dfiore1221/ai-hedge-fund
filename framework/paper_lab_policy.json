@@ -1,0 +1,45 @@
+{
+  "version": "1.0",
+  "purpose": "Aggressive paper-only experiment sleeve for AIFundOS. This is for learning, not live trading.",
+  "paper_lab_sleeve_pct": 0.15,
+  "max_single_experiment_risk_pct": 0.75,
+  "max_options_experiment_premium_pct": 0.5,
+  "max_open_experiments": 8,
+  "experiment_families": [
+    "starter_breakout",
+    "pullback_starter",
+    "partial_profit_trail",
+    "failed_long_fade",
+    "theme_etf_expression",
+    "defined_risk_options"
+  ],
+  "allowed_options_strategies": [
+    "long_call",
+    "long_put",
+    "call_debit_spread",
+    "put_debit_spread"
+  ],
+  "blocked_options_strategies": [
+    "naked_call",
+    "naked_put",
+    "short_straddle",
+    "short_strangle",
+    "ratio_spread",
+    "uncovered_short_options"
+  ],
+  "default_exit_rules": {
+    "stock_partial_profit_r": 0.5,
+    "stock_target_1_r": 1.0,
+    "stock_trailing_stop_after_partial": "move_stop_to_breakeven_after_partial_win",
+    "option_profit_take_pct": 50,
+    "option_stop_loss_pct": 50,
+    "option_time_stop_dte": 14
+  },
+  "promotion_rules": [
+    "Experiments must be tagged by family and source.",
+    "Main portfolio rules are unchanged until the experiment family has at least 20 reviewed samples.",
+    "Options experiments are paper-only until liquidity, bid/ask spread, IV, and greeks are execution-grade.",
+    "Defined-risk options only; maximum loss must be known before entry.",
+    "Every experiment must record a lesson at close."
+  ]
+}

@@ -17,6 +17,21 @@ MACRO_TICKERS = {
     "bitcoin": "BTC-USD",
 }
 
+MACRO_PROXY_TICKERS = {
+    "sp500": "SPY",
+    "nasdaq": "QQQ",
+    "dow": "DIA",
+    "russell_2000": "IWM",
+    "vix": "VIXY",
+    "dxy": "UUP",
+    "ten_year_treasury": "TBT",
+    "two_year_treasury": "SHY",
+    "gold": "GLD",
+    "oil": "USO",
+    "copper": "CPER",
+    "bitcoin": "BITO",
+}
+
 SECTOR_ETFS = {
     "Technology": "XLK",
     "Financials": "XLF",
@@ -218,9 +233,46 @@ def is_tiingo_symbol_candidate(ticker):
 
 def get_macro_market_snapshot():
     return {
-        name: get_price_history(ticker)
+        name: get_macro_price_history(name, ticker)
         for name, ticker in MACRO_TICKERS.items()
     }
+
+
+def get_macro_price_history(name, ticker):
+    proxy_ticker = MACRO_PROXY_TICKERS.get(name)
+    if proxy_ticker:
+        proxy = get_tiingo_price_history(proxy_ticker, "3mo")
+        if proxy:
+            proxy["proxy_for"] = ticker
+            proxy["proxy_ticker"] = proxy_ticker
+            proxy["proxy_note"] = f"Using {proxy_ticker} as market proxy for {ticker}."
+            return proxy
+        return {
+            "ticker": proxy_ticker,
+            "proxy_for": ticker,
+            "proxy_ticker": proxy_ticker,
+            "error": f"Macro proxy {proxy_ticker} unavailable from Tiingo.",
+            "provider": "Tiingo",
+        }
+
+    data = get_price_history(ticker)
+    if not data.get("error"):
+        return data
+
+    if not proxy_ticker:
+        return data
+
+    proxy = get_price_history(proxy_ticker)
+    if proxy.get("error"):
+        proxy["primary_error"] = data.get("error")
+        proxy["proxy_for"] = ticker
+        proxy["proxy_ticker"] = proxy_ticker
+        return proxy
+
+    proxy["proxy_for"] = ticker
+    proxy["proxy_ticker"] = proxy_ticker
+    proxy["proxy_note"] = f"Using {proxy_ticker} as market proxy because {ticker} was unavailable."
+    return proxy
 
 
 def get_sector_rotation_snapshot():

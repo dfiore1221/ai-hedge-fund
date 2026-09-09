@@ -51,8 +51,9 @@ def generate_weekly_review(end_day=None):
 def summarize_setups(setups):
     total = len(setups)
     entries = [item for item in setups if item.get("entered")]
-    target_hits = [item for item in setups if item.get("hit_target_1")]
-    stop_hits = [item for item in setups if item.get("hit_stop")]
+    target_hits = [item for item in entries if item.get("hit_target_1")]
+    partial_hits = [item for item in entries if item.get("hit_partial_win") or (item.get("output") or {}).get("hit_partial_win")]
+    stop_hits = [item for item in entries if item.get("hit_stop")]
     active = [item for item in setups if item.get("result") in {"OPEN / NO TARGET 1", "TARGET 1 HIT", "STOP FIRST", "STOP TOUCHED"}]
     pnl_values = [item.get("pnl_pct") for item in entries if item.get("pnl_pct") is not None]
 
@@ -60,10 +61,12 @@ def summarize_setups(setups):
         "setups_reviewed": total,
         "entries_triggered": len(entries),
         "target_1_hits": len(target_hits),
+        "partial_win_hits": len(partial_hits),
         "stop_hits": len(stop_hits),
         "active_or_resolved_setups": len(active),
         "entry_rate_pct": pct(len(entries), total),
         "target_hit_rate_on_entries_pct": pct(len(target_hits), len(entries)),
+        "partial_win_rate_on_entries_pct": pct(len(partial_hits), len(entries)),
         "stop_hit_rate_on_entries_pct": pct(len(stop_hits), len(entries)),
         "avg_entered_pnl_pct": average(pnl_values),
     }
@@ -105,13 +108,16 @@ def summarize_targets_and_stops(setups, closed_trades):
             "setups": 0,
             "entries": 0,
             "target_1_hits": 0,
+            "partial_win_hits": 0,
             "stop_hits": 0,
             "avg_pnl_pct": [],
         })
         row["setups"] += 1
-        row["entries"] += int(bool(setup.get("entered")))
-        row["target_1_hits"] += int(bool(setup.get("hit_target_1")))
-        row["stop_hits"] += int(bool(setup.get("hit_stop")))
+        entered = bool(setup.get("entered"))
+        row["entries"] += int(entered)
+        row["target_1_hits"] += int(entered and bool(setup.get("hit_target_1")))
+        row["partial_win_hits"] += int(entered and bool(setup.get("hit_partial_win") or (setup.get("output") or {}).get("hit_partial_win")))
+        row["stop_hits"] += int(entered and bool(setup.get("hit_stop")))
         if setup.get("pnl_pct") is not None:
             row["avg_pnl_pct"].append(setup["pnl_pct"])
 
@@ -167,6 +173,8 @@ def build_weekly_lessons(setups, closed_trades):
         return ["No setup reviews were available for the week."]
     if summary["target_hit_rate_on_entries_pct"] == 0 and summary["entries_triggered"] > 0:
         lessons.append("No entered setup hit Target 1 this week; evaluate whether targets are too ambitious or the review window is too short.")
+    if summary.get("partial_win_rate_on_entries_pct", 0) > summary["target_hit_rate_on_entries_pct"]:
+        lessons.append("Partial-win rate exceeded Target 1 rate; consider staged exits, nearer first targets, or trailing stops.")
     if summary["stop_hit_rate_on_entries_pct"] > 25:
         lessons.append("More than a quarter of entered setups hit stops; review entry quality and stop placement.")
     if summary["avg_entered_pnl_pct"] is not None and summary["avg_entered_pnl_pct"] < 0:
@@ -192,6 +200,7 @@ def format_weekly_review(report):
         f"- Setups Reviewed: {setup['setups_reviewed']}",
         f"- Entries Triggered: {setup['entries_triggered']} ({fmt_pct(setup['entry_rate_pct'])})",
         f"- Target 1 Hit Rate On Entries: {fmt_pct(setup['target_hit_rate_on_entries_pct'])}",
+        f"- Partial-Win Rate On Entries: {fmt_pct(setup.get('partial_win_rate_on_entries_pct', 0))}",
         f"- Stop Hit Rate On Entries: {fmt_pct(setup['stop_hit_rate_on_entries_pct'])}",
         f"- Average Entered P&L: {fmt_pct(setup['avg_entered_pnl_pct'])}",
         f"- Dominant Read: {accuracy['dominant_read']}",
@@ -213,12 +222,12 @@ def format_weekly_review(report):
     lines.append("")
     lines.append("## Target / Stop Table")
     lines.extend([
-        "| Symbol | Setups | Entries | Target 1 Hits | Stop Hits | Avg P&L |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| Symbol | Setups | Entries | Partial Wins | Target 1 Hits | Stop Hits | Avg P&L |",
+        "|---|---:|---:|---:|---:|---:|---:|",
     ])
     for row in report["target_stop_review"][:25]:
         lines.append(
-            f"| {row['symbol']} | {row['setups']} | {row['entries']} | {row['target_1_hits']} | "
+            f"| {row['symbol']} | {row['setups']} | {row['entries']} | {row.get('partial_win_hits', 0)} | {row['target_1_hits']} | "
             f"{row['stop_hits']} | {fmt_pct(row['avg_pnl_pct'])} |"
         )
 

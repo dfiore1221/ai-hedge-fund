@@ -5,8 +5,8 @@ from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
-import yfinance as yf
 
+from data.market_data import get_ohlcv_history
 from data.paper_ledger import build_paper_ledger
 from data.trade_journal import (
     enrich_trade_metrics,
@@ -25,10 +25,10 @@ OPENAI_PLACEHOLDER = "your_openai_api_key_here"
 ENV_PATH = PROJECT_ROOT / ".env"
 
 
-def generate_position_manager_report(use_llm=False, save_memory=True):
+def generate_position_manager_report(use_llm=False, save_memory=True, refresh_market_data=True):
     created_at = datetime.now().isoformat(timespec="seconds")
     run_id = f"{date.today().isoformat()}-position-manager"
-    journal = enrich_trade_metrics(load_trade_journal(), refresh_prices=True)
+    journal = enrich_trade_metrics(load_trade_journal(), refresh_prices=refresh_market_data)
     ledger = build_paper_ledger(journal)
 
     open_trades = []
@@ -38,15 +38,15 @@ def generate_position_manager_report(use_llm=False, save_memory=True):
     for _, row in journal.iterrows():
         status = normalize_status(row.get("status"))
         if status == "open":
-            trade = analyze_open_trade(row)
+            trade = analyze_open_trade(row, refresh_market_data=refresh_market_data)
             open_trades.append(trade)
             actions.append(build_open_trade_action(trade))
         elif status == "planned":
-            trade = analyze_planned_trade(row)
+            trade = analyze_planned_trade(row, refresh_market_data=refresh_market_data)
             planned_trades.append(trade)
             actions.append(build_planned_trade_action(trade))
 
-    actions = sorted(actions, key=lambda item: item["priority"])
+    actions = sorted(consolidate_core_actions(actions), key=lambda item: item["priority"])
     summary = summarize_position_book(open_trades, planned_trades, actions, ledger)
     deterministic_summary = build_cio_summary(summary, open_trades, planned_trades, actions)
     llm_summary = build_llm_cio_summary(summary, open_trades, planned_trades, actions) if use_llm else ""
@@ -58,12 +58,14 @@ def generate_position_manager_report(use_llm=False, save_memory=True):
         "run_id": run_id,
         "created_at": created_at,
         "mode": "paper_trading_position_management",
+        "market_data_mode": "live_refresh" if refresh_market_data else "local_cached",
         "summary": summary,
         "cio_summary": llm_summary or deterministic_summary,
         "llm_summary_used": bool(llm_summary),
         "open_trades": open_trades,
         "planned_trades": planned_trades,
         "daily_action_list": actions,
+        "rolled_up_positions": ledger.get("positions", []),
         "paper_account": ledger["account"],
         "warnings": ledger.get("warnings", []),
     }
@@ -81,7 +83,7 @@ def generate_position_manager_report(use_llm=False, save_memory=True):
     return report
 
 
-def analyze_open_trade(row):
+def analyze_open_trade(row, refresh_market_data=True):
     trade = base_trade(row)
     current = trade["current_price"] or trade["entry"]
     trade["current_price"] = current
@@ -93,16 +95,16 @@ def analyze_open_trade(row):
     trade["progress_to_target_pct"] = progress_to_target_pct(trade["side"], trade["entry"], current, trade["target"])
     trade["remaining_risk_dollars"] = remaining_risk_dollars(trade)
     trade["remaining_upside_dollars"] = remaining_upside_dollars(trade)
-    trade["realism"] = evaluate_realism(trade, anchor_price=current)
+    trade["realism"] = evaluate_realism(trade, anchor_price=current, refresh_market_data=refresh_market_data)
     trade["time_stop"] = evaluate_time_stop(trade)
     return trade
 
 
-def analyze_planned_trade(row):
+def analyze_planned_trade(row, refresh_market_data=True):
     trade = base_trade(row)
     trade["days_planned"] = days_since(trade["opened_at"])
     trade["notional"] = trade["entry"] * trade["shares"]
-    trade["realism"] = evaluate_realism(trade, anchor_price=trade["entry"])
+    trade["realism"] = evaluate_realism(trade, anchor_price=trade["entry"], refresh_market_data=refresh_market_data)
     trade["trigger_distance_pct"] = distance_pct(trade["current_price"], trade["entry"]) if trade["current_price"] else None
     return trade
 
@@ -112,6 +114,8 @@ def base_trade(row):
     stop = to_float(row.get("stop"))
     target = to_float(row.get("target"))
     shares = to_float(row.get("shares"))
+    setup_type = str(row.get("setup_type", "")).strip()
+    source = str(row.get("source", "")).strip()
     risk_per_share = abs(entry - stop) if entry and stop else 0
     return {
         "id": str(row.get("id", "")).strip(),
@@ -119,8 +123,9 @@ def base_trade(row):
         "symbol": str(row.get("symbol", "")).upper().strip(),
         "side": normalize_side(row.get("side")),
         "status": normalize_status(row.get("status")),
-        "setup_type": str(row.get("setup_type", "")).strip(),
-        "source": str(row.get("source", "")).strip(),
+        "setup_type": setup_type,
+        "source": source,
+        "is_core_sleeve": is_core_sleeve_trade(setup_type, source),
         "agent_run_id": str(row.get("agent_run_id", "")).strip(),
         "entry": entry,
         "stop": stop,
@@ -134,6 +139,11 @@ def base_trade(row):
     }
 
 
+def is_core_sleeve_trade(setup_type, source):
+    combined = f"{setup_type} {source}".lower()
+    return "core etf sleeve" in combined or "core sleeve" in combined
+
+
 def build_open_trade_action(trade):
     current = trade["current_price"]
     stop = trade["stop"]
@@ -144,6 +154,13 @@ def build_open_trade_action(trade):
     has_stop = stop > 0
     has_target = target > 0
 
+    if trade.get("is_core_sleeve"):
+        return action(
+            trade,
+            6,
+            "HOLD CORE / REBALANCE POLICY",
+            "Core ETF sleeve holdings are managed by target allocation, drift, and portfolio-level risk rules, not tactical profit targets.",
+        )
     if has_stop and side == "long" and current <= stop:
         return action(trade, 1, "EXIT", "Stop level has been hit or breached.")
     if has_stop and side == "short" and current >= stop:
@@ -193,7 +210,46 @@ def action(trade, priority, recommendation, reason):
     }
 
 
-def evaluate_realism(trade, anchor_price):
+def consolidate_core_actions(actions):
+    grouped = {}
+    passthrough = []
+    for item in actions:
+        if item.get("recommendation") != "HOLD CORE / REBALANCE POLICY":
+            passthrough.append(item)
+            continue
+        key = (item.get("symbol"), item.get("side"))
+        current = grouped.setdefault(key, {
+            **item,
+            "trade_id": "multiple lots",
+            "shares": 0.0,
+            "planned_risk": 0.0,
+            "_entry_value": 0.0,
+            "_lots": 0,
+        })
+        shares = float(item.get("shares") or 0)
+        current["shares"] += shares
+        current["planned_risk"] += float(item.get("planned_risk") or 0)
+        current["_entry_value"] += float(item.get("entry") or 0) * shares
+        current["_lots"] += 1
+        current["current_price"] = item.get("current_price")
+
+    consolidated = []
+    for item in grouped.values():
+        if item["shares"]:
+            item["entry"] = round_money(item["_entry_value"] / item["shares"])
+        item["shares"] = round_money(item["shares"])
+        item["planned_risk"] = round_money(item["planned_risk"])
+        item["reason"] = (
+            f"{item['reason']} Rolled up from {item['_lots']} lot(s)."
+        )
+        item.pop("_entry_value", None)
+        item.pop("_lots", None)
+        consolidated.append(item)
+
+    return passthrough + consolidated
+
+
+def evaluate_realism(trade, anchor_price, refresh_market_data=True):
     if not trade["stop"] or not trade["target"]:
         return {
             "rating": "not_applicable",
@@ -202,6 +258,16 @@ def evaluate_realism(trade, anchor_price):
             "stop_atr": None,
             "target_atr": None,
             "expected_time_to_target": "not applicable",
+        }
+
+    if not refresh_market_data:
+        return {
+            "rating": "not_refreshed",
+            "message": "Market-data refresh disabled; using stored current prices and skipping ATR realism checks.",
+            "atr_14": None,
+            "stop_atr": None,
+            "target_atr": None,
+            "expected_time_to_target": "unknown",
         }
 
     atr = fetch_atr(trade["symbol"])
@@ -245,27 +311,29 @@ def evaluate_realism(trade, anchor_price):
 
 
 def fetch_atr(symbol, period="3mo", window=14):
-    try:
-        history = yf.Ticker(symbol).history(period=period, auto_adjust=True)
-    except Exception as exc:
-        return {"atr": None, "as_of": "", "error": f"Could not fetch ATR data: {exc}"}
+    history = get_ohlcv_history(symbol, period=period)
 
-    if history is None or history.empty:
-        return {"atr": None, "as_of": "", "error": "No ATR data returned."}
+    if not history or history.get("error"):
+        return {"atr": None, "as_of": "", "error": history.get("error") if history else "No ATR data returned."}
 
-    required = {"High", "Low", "Close"}
-    if not required.issubset(history.columns):
-        return {"atr": None, "as_of": "", "error": "ATR data is missing high, low, or close columns."}
+    rows = history.get("rows") or []
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return {"atr": None, "as_of": "", "error": "No ATR rows returned."}
 
-    frame = history.dropna(subset=["High", "Low", "Close"]).copy()
+    required = {"high", "low", "close"}
+    if not required.issubset(frame.columns):
+        return {"atr": None, "as_of": "", "error": "ATR data is missing high, low, or close fields."}
+
+    frame = frame.dropna(subset=["high", "low", "close"]).copy()
     if len(frame) < window + 1:
         return {"atr": None, "as_of": "", "error": "Not enough price history for ATR."}
 
-    previous_close = frame["Close"].shift(1)
+    previous_close = frame["close"].shift(1)
     true_range = pd.concat([
-        frame["High"] - frame["Low"],
-        (frame["High"] - previous_close).abs(),
-        (frame["Low"] - previous_close).abs(),
+        frame["high"] - frame["low"],
+        (frame["high"] - previous_close).abs(),
+        (frame["low"] - previous_close).abs(),
     ], axis=1).max(axis=1)
     atr = true_range.rolling(window).mean().dropna()
 
@@ -274,12 +342,18 @@ def fetch_atr(symbol, period="3mo", window=14):
 
     return {
         "atr": float(atr.iloc[-1]),
-        "as_of": str(frame.index[-1].date()),
+        "as_of": str(frame.iloc[-1].get("date", "")),
         "error": "",
+        "provider": history.get("provider"),
     }
 
 
 def evaluate_time_stop(trade):
+    if trade.get("is_core_sleeve"):
+        return {
+            "status": "core_sleeve_policy",
+            "message": "Core ETF sleeve holding; review through sleeve drift/rebalance policy, not a swing-trade time stop.",
+        }
     days = trade.get("days_open") or 0
     open_r = trade.get("open_r_multiple") or 0
     if days >= 10 and open_r < 0.25:
@@ -386,7 +460,10 @@ def build_llm_cio_summary(summary, open_trades, planned_trades, actions):
                     "content": (
                         "You are the CIO of a watch-only paper trading system. "
                         "Write a concise plain-English daily position-management summary. "
-                        "Do not give real financial advice. Do not invent prices or facts."
+                        "Do not give real financial advice. Do not invent prices or facts. "
+                        "Core ETF sleeve positions must be managed only by sleeve drift, rebalance policy, "
+                        "cash policy, and portfolio-level risk rules; never describe them as take-profit, "
+                        "stop-loss, or tactical exit items unless the deterministic action explicitly says EXIT."
                     ),
                 },
                 {"role": "user", "content": json.dumps(prompt, default=str)},
@@ -404,6 +481,7 @@ def format_position_manager_report(report):
         "",
         f"Created At: {report['created_at']}",
         f"Run ID: {report['run_id']}",
+        f"Market Data Mode: {report.get('market_data_mode', 'unknown')}",
         f"Portfolio Stance: {summary['portfolio_stance']}",
         f"Confidence Score: {summary['confidence_score']}/100",
         "",
@@ -432,7 +510,7 @@ def format_position_manager_report(report):
             )
 
     lines.extend(["", "## Stop / Target Realism"])
-    trades = report["open_trades"] + report["planned_trades"]
+    trades = collapse_core_review_trades(report["open_trades"] + report["planned_trades"])
     if not trades:
         lines.append("- No open or planned trades to review.")
     else:
@@ -446,7 +524,7 @@ def format_position_manager_report(report):
             )
 
     lines.extend(["", "## Time Stop Review"])
-    open_trades = report["open_trades"]
+    open_trades = collapse_core_review_trades(report["open_trades"])
     if not open_trades:
         lines.append("- No open trades.")
     else:
@@ -477,6 +555,38 @@ def save_position_manager_report(report):
     stamped_md.write_text(markdown, encoding="utf-8")
     stamped_json.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     return latest_md
+
+
+def collapse_core_review_trades(trades):
+    collapsed = []
+    seen_core = set()
+    for trade in trades:
+        if not trade.get("is_core_sleeve"):
+            collapsed.append(trade)
+            continue
+        key = (trade.get("symbol"), trade.get("side"), trade.get("status"))
+        if key in seen_core:
+            continue
+        seen_core.add(key)
+        core_trade = dict(trade)
+        same_lots = [
+            item for item in trades
+            if item.get("is_core_sleeve")
+            and item.get("symbol") == trade.get("symbol")
+            and item.get("side") == trade.get("side")
+            and item.get("status") == trade.get("status")
+        ]
+        total_shares = sum(float(item.get("shares") or 0) for item in same_lots)
+        if total_shares:
+            core_trade["shares"] = total_shares
+            core_trade["entry"] = sum(
+                float(item.get("entry") or 0) * float(item.get("shares") or 0)
+                for item in same_lots
+            ) / total_shares
+        core_trade["id"] = "multiple lots" if len(same_lots) > 1 else core_trade.get("id")
+        core_trade["lot_count"] = len(same_lots)
+        collapsed.append(core_trade)
+    return collapsed
 
 
 def count_actions(actions, names):

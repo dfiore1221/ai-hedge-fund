@@ -158,6 +158,16 @@ The `position-manager today` command:
 6. Writes the Position Manager output to local memory so the Committee can learn from prior supervision.
 7. Uses a deterministic CIO summary by default; add `--llm` to request an OpenAI-generated plain-English CIO summary.
 
+The `portfolio-governor today` command:
+
+1. Reviews the whole simulated paper portfolio against professional portfolio-control rules.
+2. Enforces v1 core ETF sleeve rules: rebalance band, review cadence, drift threshold, and market-hours realism policy.
+3. Builds exposure maps by bucket, sector/category, symbol, estimated beta, liquidity tier, and concentration.
+4. Checks portfolio-level risk controls: cash reserve, drawdown, open planned risk, single-position limits, sector limits, and growth-bucket concentration.
+5. Adds attribution by symbol, source, and setup type so AIFundOS can explain what made or lost money and why.
+6. Estimates paper execution friction using configurable commission, slippage, and bid/ask spread assumptions.
+7. States dividend and tax modeling limitations until those are upgraded from assumptions into full accrual/tax-lot tracking.
+
 The `intraday-monitor now` command:
 
 1. Runs during market hours as the Position Manager's alert layer.
@@ -297,10 +307,11 @@ APPROVED_EMAIL_RECIPIENTS=your_email@example.com
 Optional dashboard protection:
 
 ```bash
+DASHBOARD_REQUIRE_PASSCODE=true
 DASHBOARD_PASSCODE=choose_a_local_dashboard_passcode
 ```
 
-When `DASHBOARD_PASSCODE` is set, the Streamlit cockpit requires that passcode before showing the dashboard. If it is not set, the dashboard remains usable but `security check` will warn you.
+By default the Streamlit cockpit opens without a passcode for local development. Set `DASHBOARD_REQUIRE_PASSCODE=true` and `DASHBOARD_PASSCODE=...` to lock the dashboard again.
 
 To schedule the email for 4:45 AM on macOS:
 
@@ -327,6 +338,29 @@ launchctl load ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.email-retry.plist
 ```
 
 Retry logs are written to `reports/email_queue/automation.log`, `launchd.out.log`, and `launchd.err.log`.
+
+The `automation-watchdog run` command:
+
+1. Checks whether today's morning brief exists during the morning catch-up window.
+2. Generates and emails the morning brief if it is missing between 4:45 AM and 11:30 AM.
+3. Retries queued emails while the morning retry window is open.
+4. Runs intraday monitoring during market hours without opening new positions by itself.
+5. Runs daily setup review after market close if the review is missing.
+6. Runs weekly review on Friday after the close if the review is missing.
+7. Saves a watchdog report in `reports/automation_watchdog/`.
+
+To schedule the watchdog every 15 minutes on macOS:
+
+```bash
+cd "/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund"
+chmod +x scripts/run_automation_watchdog.sh
+mkdir -p ~/Library/LaunchAgents
+cp automation/com.dfiore.ai-hedge-fund.automation-watchdog.plist ~/Library/LaunchAgents/
+launchctl unload ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.automation-watchdog.plist 2>/dev/null || true
+launchctl load ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.automation-watchdog.plist
+```
+
+Watchdog logs are written to `reports/automation_watchdog/automation.log`, `launchd.out.log`, and `launchd.err.log`.
 
 The `macro today` command:
 
@@ -435,6 +469,7 @@ See `docs/data_quality_systems_research.md` for the current data-provider resear
 - [x] Add economic calendar integration. Uses `TRADING_ECONOMICS_API_KEY` when available, otherwise uses the free FRED release calendar through `FRED_API_KEY`.
 - [x] Add premium news / analyst feed. Uses Benzinga market-moving news and analyst ratings when `BENZINGA_API_KEY` is configured, Finnhub company news and recommendation trends when `FINNHUB_API_KEY` is configured, and Yahoo starter headlines/actions as fallback.
 - [x] Add better market data provider. Uses Tiingo latest equity prices when `TIINGO_API_KEY` is configured, or Alpaca latest stock bars when Alpaca keys are configured, with Yahoo as fallback.
+- [x] Add Quiver optional alternative-data slot. Uses `QUIVER_API_KEY` for a starter off-exchange data check; free/Hobbyist access is useful context but does not replace Trader-tier insider, hedge-fund, top-shareholder, or ETF-holdings data.
 - [x] Add options-readiness framework. Defines beginner strategies, risk limits, education terms, paper-options journal, and provider trial plan.
 - [ ] Add options data provider. Interim enhanced starter layer uses Yahoo/yfinance chains for watch-only put/call, IV, liquidity, and unusual-activity clues. Intrinio is the planned first trial candidate when ready.
 - [x] Add local data cache. Stores successful provider JSON responses under ignored `data_cache/` with short TTLs and stale fallback where appropriate.
@@ -442,11 +477,11 @@ See `docs/data_quality_systems_research.md` for the current data-provider resear
 
 ## Professional Portfolio To-Do List
 
-- [ ] Formalize and enforce core ETF sleeve rebalance rules, including rebalance bands, cadence, drift thresholds, and action recommendations.
-- [ ] Add portfolio-level stop, hedge, and drawdown rules for ETF/core sleeve positions.
-- [ ] Build a full exposure map covering sector, factor, beta, liquidity, and correlation risk.
-- [ ] Add professional attribution: what made or lost money, by position, sleeve, sector, setup type, and agent recommendation.
-- [ ] Model dividends, taxes, commissions, slippage, bid/ask spread, borrow costs, and execution assumptions.
+- [x] Formalize and enforce v1 core ETF sleeve rebalance rules, including rebalance bands, cadence, drift thresholds, and action recommendations.
+- [x] Add v1 portfolio-level stop, hedge-review, and drawdown rules for ETF/core sleeve positions.
+- [x] Build a v1 exposure map covering sector/category, bucket/factor proxy, beta estimate, liquidity tier, and concentration/correlation risk.
+- [x] Add v1 professional attribution: what made or lost money, by position, sleeve/source, sector/category, setup type, and agent recommendation source.
+- [x] Model v1 commissions, slippage, bid/ask spread, dividend, tax, and execution assumptions. Dividends/taxes are disclosed assumptions, not full accrual/tax-lot accounting yet.
 - [ ] Keep improving data quality toward institutional-grade reliability with stronger provider agreement checks and source conflict handling.
 - [ ] Prove whether the system has edge through enough paper-trade history before loosening trade gates.
 - [ ] Observe newly built alerts and automations during live market hours, then tune thresholds to reduce missed events and noise.

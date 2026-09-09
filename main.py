@@ -174,7 +174,9 @@ def journal(action):
             format_trade_journal_summary,
             load_trade_journal,
             open_trade_from_plan,
+            partial_close_trade,
             summarize_trade_journal,
+            update_trade_levels,
         )
     except ModuleNotFoundError as exc:
         raise RuntimeError(
@@ -223,12 +225,58 @@ def journal(action):
             exit_price=float(sys.argv[4]),
             exit_reason=get_cli_option("--reason", ""),
             lessons=get_cli_option("--lessons", ""),
+            closed_at=get_cli_option("--closed-at", ""),
         )
         print(f"Closed simulated trade: {trade['id']} ({trade['symbol']})")
         print(format_trade_journal_summary(summarize_trade_journal(load_trade_journal())))
         return
 
-    raise ValueError("Journal command supports: summary, open, close")
+    if action == "partial-close":
+        if len(sys.argv) < 6:
+            raise ValueError(
+                "Usage: python3 main.py journal partial-close TRADE_ID SHARES EXIT_PRICE "
+                "[--reason TEXT] [--lessons TEXT]"
+            )
+        result = partial_close_trade(
+            trade_id=sys.argv[3],
+            shares_to_close=float(sys.argv[4]),
+            exit_price=float(sys.argv[5]),
+            exit_reason=get_cli_option("--reason", ""),
+            lessons=get_cli_option("--lessons", ""),
+            closed_at=get_cli_option("--closed-at", ""),
+        )
+        closed = result["closed_trade"]
+        remaining = result["remaining_trade"]
+        print(
+            f"Partially closed simulated trade: {closed['id']} ({closed['symbol']}) "
+            f"for {closed['shares']} shares"
+        )
+        print(f"Remaining shares on {remaining['id']}: {remaining['shares']}")
+        print(format_trade_journal_summary(summarize_trade_journal(load_trade_journal())))
+        return
+
+    if action == "update-levels":
+        if len(sys.argv) < 4:
+            raise ValueError(
+                "Usage: python3 main.py journal update-levels TRADE_ID "
+                "[--stop PRICE] [--target PRICE] [--notes TEXT]"
+            )
+        stop_value = get_cli_option("--stop", None)
+        target_value = get_cli_option("--target", None)
+        trade = update_trade_levels(
+            trade_id=sys.argv[3],
+            stop=float(stop_value) if stop_value not in {None, ""} else None,
+            target=float(target_value) if target_value not in {None, ""} else None,
+            notes=get_cli_option("--notes", ""),
+        )
+        print(
+            f"Updated simulated trade levels: {trade['id']} ({trade['symbol']}) "
+            f"stop {trade['stop']} target {trade['target']}"
+        )
+        print(format_trade_journal_summary(summarize_trade_journal(load_trade_journal())))
+        return
+
+    raise ValueError("Journal command supports: summary, open, close, partial-close, update-levels")
 
 
 def ledger(action):
@@ -243,6 +291,27 @@ def ledger(action):
         ) from exc
 
     print(format_paper_ledger_summary(build_paper_ledger()))
+
+
+def portfolio_governor(period):
+    try:
+        from agents.portfolio_governor import (
+            format_portfolio_governor_report,
+            generate_portfolio_governor_report,
+            save_portfolio_governor_report,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    if str(period).lower() != "today":
+        raise ValueError("Portfolio governor currently supports: today")
+
+    report = generate_portfolio_governor_report()
+    output_path = save_portfolio_governor_report(report)
+    print(format_portfolio_governor_report(report))
+    print(f"Saved portfolio governor report to: {output_path}")
 
 
 def portfolio_ticker(action):
@@ -283,6 +352,77 @@ def fills(action):
 
     result = process_paper_fills(apply=action.lower() == "apply")
     print(format_paper_fill_report(result))
+
+
+def exit_orders(action):
+    try:
+        from data.exit_orders import (
+            cancel_exit_order,
+            create_exit_order,
+            ensure_exit_orders,
+            format_exit_order_list,
+            format_exit_order_report,
+            mark_exit_order_filled,
+            process_exit_orders,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    action = action.lower()
+    if action == "list":
+        print(format_exit_order_list(ensure_exit_orders()))
+        return
+
+    if action == "open":
+        if len(sys.argv) < 4:
+            raise ValueError(
+                "Usage: python3 main.py exit-orders open TRADE_ID "
+                "[--shares all|NUMBER] [--scheduled-for YYYY-MM-DD] [--reason TEXT]"
+            )
+        order = create_exit_order(
+            trade_id=sys.argv[3],
+            shares=get_cli_option("--shares", "all"),
+            scheduled_for=get_cli_option("--scheduled-for", ""),
+            reason=get_cli_option("--reason", "Human-approved exit"),
+            lessons=get_cli_option("--lessons", ""),
+            notes=get_cli_option("--notes", ""),
+        )
+        print(f"Saved exit order: {order['id']} for {order['symbol']} trade {order['trade_id']}")
+        print(format_exit_order_list(ensure_exit_orders()))
+        return
+
+    if action == "cancel":
+        if len(sys.argv) < 4:
+            raise ValueError("Usage: python3 main.py exit-orders cancel ORDER_ID [--notes TEXT]")
+        order = cancel_exit_order(sys.argv[3], notes=get_cli_option("--notes", ""))
+        print(f"Canceled exit order: {order['id']}")
+        print(format_exit_order_list(ensure_exit_orders()))
+        return
+
+    if action == "fill":
+        if len(sys.argv) < 5:
+            raise ValueError(
+                "Usage: python3 main.py exit-orders fill ORDER_ID FILL_PRICE "
+                "[--filled-at YYYY-MM-DDTHH:MM:SS] [--notes TEXT]"
+            )
+        order = mark_exit_order_filled(
+            order_id=sys.argv[3],
+            fill_price=float(sys.argv[4]),
+            filled_at=get_cli_option("--filled-at", ""),
+            notes=get_cli_option("--notes", ""),
+        )
+        print(f"Marked exit order filled: {order['id']}")
+        print(format_exit_order_list(ensure_exit_orders()))
+        return
+
+    if action in {"check", "apply"}:
+        result = process_exit_orders(apply=action == "apply")
+        print(format_exit_order_report(result))
+        return
+
+    raise ValueError("Exit-orders command supports: list, open, cancel, fill, check, apply")
 
 
 def get_cli_option(name, default=""):
@@ -360,6 +500,76 @@ def weekly_review(action):
     output_path = save_weekly_review_report(report)
     print(format_weekly_review(report))
     print(f"Saved weekly review to: {output_path}")
+
+
+def setup_backtest(action):
+    try:
+        from agents.weekly_setup_backtest import (
+            format_weekly_setup_backtest,
+            generate_weekly_setup_backtest,
+            save_weekly_setup_backtest_report,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    start_day = action
+    end_day = get_cli_option("--end", "")
+    top_n_option = get_cli_option("--top", "")
+    top_n = int(top_n_option) if top_n_option else 10
+    report = generate_weekly_setup_backtest(
+        start_day=start_day,
+        end_day=end_day or None,
+        top_n=top_n,
+    )
+    output_path = save_weekly_setup_backtest_report(report)
+    print(format_weekly_setup_backtest(report))
+    print(f"Saved weekly setup backtest to: {output_path}")
+
+
+def automation_watchdog(action):
+    if action.lower() not in {"run", "check", "now"}:
+        raise ValueError("Automation watchdog supports: run")
+
+    try:
+        from agents.automation_watchdog import (
+            format_automation_watchdog_report,
+            run_automation_watchdog,
+            save_automation_watchdog_report,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    report = run_automation_watchdog()
+    output_path = save_automation_watchdog_report(report)
+    print(format_automation_watchdog_report(report))
+    print(f"Saved automation watchdog report to: {output_path}")
+
+
+def top_pick_backtest(action):
+    try:
+        from agents.weekly_setup_backtest import (
+            format_top_pick_scenario_backtest,
+            generate_top_pick_scenario_backtest,
+            save_top_pick_scenario_backtest_report,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    start_day = action
+    end_day = get_cli_option("--end", "")
+    report = generate_top_pick_scenario_backtest(
+        start_day=start_day,
+        end_day=end_day or None,
+    )
+    output_path = save_top_pick_scenario_backtest_report(report)
+    print(format_top_pick_scenario_backtest(report))
+    print(f"Saved top-pick scenario backtest to: {output_path}")
 
 
 def security(action):
@@ -619,7 +829,7 @@ def options_ready(action):
             raise ValueError(
                 "Usage: python3 main.py options-ready open SYMBOL STRATEGY EXPIRATION STRIKE "
                 "ENTRY_PREMIUM CONTRACTS [--status planned|open] [--target-premium PRICE] "
-                "[--stop-premium PRICE]"
+                "[--stop-premium PRICE] [--short-strike PRICE]"
             )
         symbol = normalize_ticker(sys.argv[3])
         strategy = sys.argv[4]
@@ -632,6 +842,7 @@ def options_ready(action):
             "strategy": strategy,
             "expiration": expiration,
             "strike": strike,
+            "short_strike": get_cli_option("--short-strike", ""),
             "entry_premium": entry_premium,
             "contracts": contracts,
             "status": get_cli_option("--status", "planned"),
@@ -663,6 +874,43 @@ def options_ready(action):
         return
 
     raise ValueError("Options-ready supports: status, summary, open, close")
+
+
+def paper_lab(action):
+    try:
+        from agents.paper_lab import (
+            build_options_contract_plan,
+            format_options_contract_plan,
+            format_paper_lab_report,
+            generate_paper_lab_report,
+            save_paper_lab_report,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    action = str(action or "").lower().strip()
+    if action in {"today", "summary"}:
+        report = generate_paper_lab_report()
+        output_path = save_paper_lab_report(report)
+        print(format_paper_lab_report(report))
+        print(f"Saved Paper Lab report to: {output_path}")
+        return
+
+    if action == "options-plan":
+        if len(sys.argv) < 4:
+            raise ValueError(
+                "Usage: python3 main.py paper-lab options-plan SYMBOL "
+                "[--strategy long_call|long_put|call_debit_spread|put_debit_spread] [--save]"
+            )
+        symbol = normalize_ticker(sys.argv[3])
+        strategy = get_cli_option("--strategy", "long_call")
+        plan = build_options_contract_plan(symbol, strategy=strategy, save="--save" in sys.argv[3:])
+        print(format_options_contract_plan(plan))
+        return
+
+    raise ValueError("Paper Lab supports: today, options-plan")
 
 
 def news(ticker):
@@ -749,7 +997,8 @@ def position_manager(period):
         raise ValueError("Position manager currently supports: today")
 
     use_llm = "--llm" in sys.argv[3:]
-    report = generate_position_manager_report(use_llm=use_llm)
+    local_mode = "--local" in sys.argv[3:] or "--no-refresh" in sys.argv[3:]
+    report = generate_position_manager_report(use_llm=use_llm, refresh_market_data=not local_mode)
     output_path = save_position_manager_report(report)
     print(format_position_manager_report(report))
     print(f"Saved position manager report to: {output_path}")
@@ -801,17 +1050,25 @@ def main():
         print("  python3 main.py journal open MSFT 400 380 430 10 --status planned --run-id RUN_ID")
         print("  python3 main.py journal close TRADE_ID 425 --reason target")
         print("  python3 main.py ledger summary")
+        print("  python3 main.py portfolio-governor today")
         print("  python3 main.py ticker status")
         print("  python3 main.py ticker status --json")
         print("  python3 main.py fills check")
         print("  python3 main.py fills apply")
+        print("  python3 main.py exit-orders open TRADE_ID --shares all --scheduled-for YYYY-MM-DD")
+        print("  python3 main.py exit-orders check")
+        print("  python3 main.py exit-orders apply")
         print("  python3 main.py feedback summary")
         print("  python3 main.py review today")
         print("  python3 main.py weekly-review today")
+        print("  python3 main.py setup-backtest 2026-08-03 --end 2026-08-07")
+        print("  python3 main.py top-pick-backtest 2026-08-01 --end 2026-08-17")
         print("  python3 main.py position-manager today")
+        print("  python3 main.py position-manager today --local")
         print("  python3 main.py position-manager today --llm")
         print("  python3 main.py intraday-monitor now")
         print("  python3 main.py intraday-monitor now --dry-run")
+        print("  python3 main.py automation-watchdog run")
         print("  python3 main.py security check")
         print("  python3 main.py data-health today")
         print("  python3 main.py project status")
@@ -819,6 +1076,8 @@ def main():
         print("  python3 main.py options-ready status")
         print("  python3 main.py options-ready status --symbol MSFT")
         print("  python3 main.py options-ready summary")
+        print("  python3 main.py paper-lab today")
+        print("  python3 main.py paper-lab options-plan MSFT --strategy long_call")
         print("  python3 main.py news MSFT")
         print("  python3 main.py backtest MSFT")
         print("  python3 main.py analyze MSFT")
@@ -861,20 +1120,30 @@ def main():
             journal(ticker)
         elif command == "ledger":
             ledger(ticker)
+        elif command == "portfolio-governor":
+            portfolio_governor(ticker)
         elif command == "ticker":
             portfolio_ticker(ticker)
         elif command == "fills":
             fills(ticker)
+        elif command == "exit-orders":
+            exit_orders(ticker)
         elif command == "feedback":
             feedback(ticker)
         elif command == "review":
             review(ticker)
         elif command == "weekly-review":
             weekly_review(ticker)
+        elif command == "setup-backtest":
+            setup_backtest(ticker)
+        elif command == "top-pick-backtest":
+            top_pick_backtest(ticker)
         elif command == "position-manager":
             position_manager(ticker)
         elif command == "intraday-monitor":
             intraday_monitor(ticker)
+        elif command == "automation-watchdog":
+            automation_watchdog(ticker)
         elif command == "security":
             security(ticker)
         elif command == "data-health":
@@ -885,6 +1154,8 @@ def main():
             options(ticker)
         elif command == "options-ready":
             options_ready(ticker)
+        elif command == "paper-lab":
+            paper_lab(ticker)
         elif command == "news":
             news(ticker)
         elif command == "backtest":

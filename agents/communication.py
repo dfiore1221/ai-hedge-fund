@@ -31,6 +31,7 @@ def generate_conflict_memo(symbol, agent_outputs):
     risk = agent_outputs.get("risk", {})
     news = agent_outputs.get("news", {})
     options = agent_outputs.get("options", {})
+    alternative = agent_outputs.get("alternative", {})
     backtest = agent_outputs.get("backtest", {})
     memory = agent_outputs.get("memory", {})
 
@@ -54,6 +55,12 @@ def generate_conflict_memo(symbol, agent_outputs):
 
     if news.get("stance") == "positive_catalyst" and risk.get("decision") == "veto":
         conflicts.append("Positive news catalyst conflicts with Risk Manager veto.")
+
+    if (
+        alternative.get("stance") == "elevated_off_exchange_short_pressure"
+        and technical.get("stance") == "bullish"
+    ):
+        conflicts.append("Bullish technical stance conflicts with elevated Quiver off-exchange short-pressure context.")
 
     if risk.get("decision") == "veto" and technical.get("stance") in {"bullish", "neutral"}:
         conflicts.append("Risk veto conflicts with non-negative technical stance.")

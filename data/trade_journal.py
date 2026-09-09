@@ -3,7 +3,8 @@ from pathlib import Path
 from uuid import uuid4
 
 import pandas as pd
-import yfinance as yf
+
+from data.market_data import get_price_history
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -126,18 +127,98 @@ def open_trade_from_plan(
     })
 
 
-def close_trade(trade_id, exit_price, exit_reason="", lessons=""):
-    journal = load_trade_journal()
+def close_trade(trade_id, exit_price, exit_reason="", lessons="", closed_at=None):
+    journal = normalize_frame(load_trade_journal())
     match = journal["id"].astype(str) == str(trade_id)
     if not match.any():
         raise ValueError(f"No trade found with id {trade_id}.")
 
     index = journal[match].index[0]
     journal.at[index, "status"] = CLOSED_STATUS
-    journal.at[index, "closed_at"] = now_iso()
-    journal.at[index, "exit_price"] = exit_price
+    journal.at[index, "closed_at"] = closed_at or now_iso()
+    journal.at[index, "exit_price"] = str(exit_price)
     journal.at[index, "exit_reason"] = exit_reason
     journal.at[index, "lessons"] = lessons
+
+    journal = enrich_trade_metrics(journal)
+    save_trade_journal(journal)
+    return journal.loc[index].to_dict()
+
+
+def partial_close_trade(trade_id, shares_to_close, exit_price, exit_reason="", lessons="", closed_at=None):
+    journal = normalize_frame(load_trade_journal())
+    match = journal["id"].astype(str) == str(trade_id)
+    if not match.any():
+        raise ValueError(f"No trade found with id {trade_id}.")
+
+    index = journal[match].index[0]
+    row = journal.loc[index].copy()
+    status = normalize_status(row.get("status"))
+    if status != "open":
+        raise ValueError("Only open trades can be partially closed.")
+
+    original_shares = to_float(row.get("shares"))
+    shares_to_close = float(shares_to_close)
+    if shares_to_close <= 0:
+        raise ValueError("Shares to close must be greater than zero.")
+    if shares_to_close >= original_shares:
+        raise ValueError("Partial close shares must be less than the open share count. Use close instead.")
+
+    remaining_shares = original_shares - shares_to_close
+    now = closed_at or now_iso()
+
+    journal.at[index, "shares"] = f"{remaining_shares:g}"
+    journal.at[index, "notes"] = append_note(
+        row.get("notes", ""),
+        f"Partial simulated exit on {now}: sold {shares_to_close:g} shares at {float(exit_price):.2f}; {remaining_shares:g} shares remain.",
+    )
+
+    closed_row = row.copy()
+    closed_row["id"] = new_trade_id()
+    closed_row["shares"] = f"{shares_to_close:g}"
+    closed_row["status"] = CLOSED_STATUS
+    closed_row["closed_at"] = now
+    closed_row["exit_price"] = str(exit_price)
+    closed_row["exit_reason"] = exit_reason
+    closed_row["lessons"] = lessons
+    closed_row["notes"] = append_note(
+        row.get("notes", ""),
+        f"Partial simulated exit lot split from {trade_id} on {now}; sold {shares_to_close:g} shares at {float(exit_price):.2f}.",
+    )
+
+    journal = pd.concat([journal, pd.DataFrame([closed_row])], ignore_index=True)
+    journal = enrich_trade_metrics(journal)
+    save_trade_journal(journal)
+    return {
+        "remaining_trade": journal.loc[index].to_dict(),
+        "closed_trade": journal.iloc[-1].to_dict(),
+    }
+
+
+def update_trade_levels(trade_id, stop=None, target=None, notes=""):
+    journal = load_trade_journal()
+    match = journal["id"].astype(str) == str(trade_id)
+    if not match.any():
+        raise ValueError(f"No trade found with id {trade_id}.")
+
+    index = journal[match].index[0]
+    changes = []
+    if stop is not None:
+        previous = journal.at[index, "stop"]
+        journal.at[index, "stop"] = str(stop)
+        changes.append(f"stop {previous} -> {stop}")
+    if target is not None:
+        previous = journal.at[index, "target"]
+        journal.at[index, "target"] = str(target)
+        changes.append(f"target {previous} -> {target}")
+
+    if not changes:
+        raise ValueError("No stop or target update supplied.")
+
+    note = f"Level update on {now_iso()}: {', '.join(changes)}."
+    if notes:
+        note = f"{note} {notes}"
+    journal.at[index, "notes"] = append_note(journal.at[index, "notes"], note)
 
     journal = enrich_trade_metrics(journal)
     save_trade_journal(journal)
@@ -266,9 +347,17 @@ def normalize_frame(frame):
         frame[column] = frame[column].astype("object")
 
     frame["symbol"] = frame["symbol"].astype(str).str.upper().str.strip()
+    frame = drop_blank_trade_rows(frame)
     frame["side"] = frame["side"].map(normalize_side)
     frame["status"] = frame["status"].map(normalize_status)
     return frame[TRADE_COLUMNS]
+
+
+def drop_blank_trade_rows(frame):
+    symbol_blank = frame["symbol"].astype(str).str.strip().eq("")
+    no_entry = frame["entry"].map(to_float).eq(0)
+    no_shares = frame["shares"].map(to_float).eq(0)
+    return frame[~(symbol_blank & no_entry & no_shares)].copy()
 
 
 def fetch_latest_prices(symbols):
@@ -276,16 +365,10 @@ def fetch_latest_prices(symbols):
     for symbol in symbols:
         if not symbol:
             continue
-        try:
-            history = yf.Ticker(symbol).history(period="5d", interval="1d", auto_adjust=True)
-        except Exception:
+        data = get_price_history(symbol, period="10d")
+        if not data or data.get("error") or data.get("latest") is None:
             continue
-        if history is None or history.empty or "Close" not in history.columns:
-            continue
-        close = history["Close"].dropna()
-        if close.empty:
-            continue
-        prices[symbol] = float(close.iloc[-1])
+        prices[symbol] = float(data["latest"])
     return prices
 
 
@@ -365,6 +448,13 @@ def round_number(value):
     if value == "":
         return ""
     return round(float(value), 4)
+
+
+def append_note(existing, note):
+    existing = str(existing or "").strip()
+    if not existing:
+        return note
+    return f"{existing}\n{note}"
 
 
 def new_trade_id():

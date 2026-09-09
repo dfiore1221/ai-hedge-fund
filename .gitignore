@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 venv/
 .vscode/
+.agents/
 companies/
 reports/validation/
 reports/market_intelligence/
@@ -19,12 +20,16 @@ reports/options/
 reports/options_readiness/
 reports/news/
 reports/backtests/
+reports/alternative_data/
 reports/feedback/
 reports/committee_questions/
+reports/automation_watchdog/
+reports/paper_lab/
 reports/paper_fills/
 reports/setup_review/
 reports/weekly_review/
 reports/position_manager/
+reports/portfolio_governor/
 reports/intraday_monitor/
 reports/email_queue/
 reports/*.log
@@ -32,3 +37,4 @@ data_cache/
 portfolio/holdings.json
 portfolio/trade_journal.csv
 portfolio/options_journal.csv
+portfolio/exit_orders.csv

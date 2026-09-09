@@ -12,6 +12,7 @@ def write_countercase(symbol, agent_outputs, conflicts):
     risk = agent_outputs.get("risk", {})
     macro = agent_outputs.get("macro", {})
     options = agent_outputs.get("options", {})
+    alternative = agent_outputs.get("alternative", {})
     backtest = agent_outputs.get("backtest", {})
     news = agent_outputs.get("news", {})
     memory = agent_outputs.get("memory", {})
@@ -43,8 +44,16 @@ def write_countercase(symbol, agent_outputs, conflicts):
     elif news.get("stance") == "positive_catalyst" and technical.get("stance") in {"no_trade", "bearish"}:
         counterpoints.append("Positive headline catalyst conflicts with weak price action.")
 
+    if alternative.get("stance") == "elevated_off_exchange_short_pressure":
+        counterpoints.append("Quiver flags elevated off-exchange short pressure; bullish setups need stronger confirmation.")
+    elif alternative.get("stance") == "unavailable":
+        counterpoints.append("Quiver alternative data is unavailable or not entitled; do not assume institutional/crowding support.")
+
     if news.get("missing_information"):
         counterpoints.append("News layer is still a starter feed and can miss premium analyst/action signals.")
+
+    if alternative.get("missing_information"):
+        counterpoints.append("Alternative data/crowding context is incomplete.")
 
     thesis = memory.get("current_thesis") or {}
     if thesis.get("open_questions"):
@@ -67,8 +76,8 @@ def write_countercase(symbol, agent_outputs, conflicts):
         "countercase": counterpoints,
         "bias_flags": identify_bias_flags(agent_outputs, conflicts),
         "missing_information": [
-            "Crowding metrics are not connected yet.",
-            "User behavioral state and recent trading performance are not connected yet.",
+            "Institutional crowding metrics are not connected yet.",
+            "Behavioral and performance memory is early; it will improve as paper trades close.",
         ],
     }
 
@@ -78,6 +87,7 @@ def identify_bias_flags(agent_outputs, conflicts):
     risk = agent_outputs.get("risk", {})
     options = agent_outputs.get("options", {})
     news = agent_outputs.get("news", {})
+    alternative = agent_outputs.get("alternative", {})
     memory = agent_outputs.get("memory", {})
 
     if risk.get("decision") == "veto" and memory.get("current_thesis"):
@@ -88,6 +98,8 @@ def identify_bias_flags(agent_outputs, conflicts):
         flags.append("Options fear signal risk: protective put activity can reflect hedging, not necessarily directional conviction.")
     if news.get("stance") == "positive_catalyst" and risk.get("decision") != "approved_for_paper_trade":
         flags.append("Headline-chasing risk: positive news should not override entry quality or risk controls.")
+    if alternative.get("stance") == "unavailable" and memory.get("current_thesis"):
+        flags.append("Crowding blind-spot risk: thesis exists but alternative positioning data is unavailable.")
     if conflicts:
         flags.append("Conflict risk: specialist agents disagree.")
 

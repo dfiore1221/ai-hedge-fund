@@ -18,7 +18,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WATCHLIST_PATH = PROJECT_ROOT / "framework" / "watchlist.json"
 REPORTS_DIR = PROJECT_ROOT / "reports" / "morning_brief"
 DEFAULT_TOP_N = 10
-DEFAULT_SYMBOL_TIMEOUT_SECONDS = 20
+DEFAULT_SYMBOL_TIMEOUT_SECONDS = 8
+DEFAULT_MAX_IDEAS_PER_CATEGORY = 2
 
 
 def load_watchlist_entries():
@@ -54,6 +55,8 @@ def load_watchlist_entries():
             "symbol": symbol,
             "display_symbol": item.get("display_symbol", symbol).upper().strip(),
             "category": item.get("category", "Uncategorized"),
+            "role": item.get("role"),
+            "bucket": item.get("bucket"),
             "notes": item.get("notes"),
         })
 
@@ -118,6 +121,15 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
         for summary in ranked
         if summary.get("final_decision", {}).get("status") == "NEEDS DATA"
     ]
+    fade_watch = sorted(
+        [
+            summary
+            for summary in ranked
+            if failed_long_signal(summary).get("status") in {"watch", "strong_watch"}
+        ],
+        key=lambda item: failed_long_signal(item).get("score") or 0,
+        reverse=True,
+    )
 
     return {
         "agent": "Morning Brief",
@@ -131,15 +143,38 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
         "macro": macro_report,
         "symbols_scanned": symbols,
         "top_n": max_ideas,
-        "approved_simulated_trades": [summarize_idea(summary) for summary in approved[:max_ideas]],
-        "conditional_setups": [summarize_idea(summary) for summary in conditional[:max_ideas]],
-        "worth_watching": [summarize_idea(summary) for summary in watch[:max_ideas]],
-        "rejected_or_avoid": [summarize_idea(summary) for summary in rejected[:max_ideas]],
-        "needs_data": [summarize_idea(summary) for summary in needs_data[:max_ideas]],
-        "ideas": [summarize_idea(summary) for summary in ranked[:max_ideas]],
+        "approved_simulated_trades": [
+            summarize_idea(summary)
+            for summary in select_diversified_ideas(approved, max_ideas)
+        ],
+        "conditional_setups": [
+            summarize_idea(summary)
+            for summary in select_diversified_ideas(conditional, max_ideas)
+        ],
+        "worth_watching": [
+            summarize_idea(summary)
+            for summary in select_diversified_ideas(watch, max_ideas)
+        ],
+        "bearish_fade_watch": [
+            summarize_idea(summary)
+            for summary in select_diversified_ideas(fade_watch, max_ideas)
+        ],
+        "rejected_or_avoid": [
+            summarize_idea(summary)
+            for summary in select_diversified_ideas(rejected, max_ideas)
+        ],
+        "needs_data": [
+            summarize_idea(summary)
+            for summary in select_diversified_ideas(needs_data, max_ideas)
+        ],
+        "ideas": [
+            summarize_idea(summary)
+            for summary in select_diversified_ideas(ranked, max_ideas)
+        ],
         "category_summary": build_category_summary(summaries),
+        "universe_balance": build_universe_balance(entries, summaries),
         "committee_summaries": summaries,
-        "missing_information": collect_missing_information(summaries),
+        "missing_information": collect_missing_information(summaries, data_health),
     }
 
 
@@ -162,7 +197,13 @@ def build_entries(symbols):
 def run_committee_scan(symbol, macro_report):
     # yfinance can print harmless ETF metadata warnings directly; keep the brief clean.
     with symbol_scan_timeout(), contextlib.redirect_stderr(io.StringIO()):
-        return create_cio_summary(symbol, macro_report=macro_report, include_options=False)
+        return create_cio_summary(
+            symbol,
+            macro_report=macro_report,
+            include_options=False,
+            include_alternative=False,
+            include_recommendation_trends=False,
+        )
 
 
 @contextlib.contextmanager
@@ -214,6 +255,7 @@ def score_candidate(summary):
     source_reports = summary.get("source_reports") or {}
     backtest = source_reports.get("backtest") or {}
     conflict_memo = summary.get("conflict_memo") or {}
+    realism = calculate_setup_realism(summary)
 
     if decision.get("status") == "PAPER TRADE ONLY":
         score += 40
@@ -272,6 +314,38 @@ def score_candidate(summary):
     if news_score is not None:
         score += min(8, max(-8, news_score))
 
+    rating = realism.get("rating")
+    tradability = (((source_reports.get("risk") or {}).get("setup_calibration") or {}).get("classification"))
+    if tradability == "conditional_trade_candidate":
+        score += 6
+    elif tradability == "starter_only":
+        score += 1
+    elif tradability == "interesting_not_tradable":
+        score -= 10
+
+    if rating == "reasonable":
+        score += 4
+    elif rating == "extended_target":
+        score -= 8
+    elif rating in {"ambitious_target", "too_wide_stop", "too_tight_stop"}:
+        score -= 12
+    elif rating == "unknown":
+        score -= 3
+
+    setup_learning = ((source_reports.get("risk") or {}).get("setup_learning_memory") or {})
+    learning_score = setup_learning.get("learning_score")
+    if learning_score is not None and learning_score < 55:
+        score -= 8
+    target_rate = setup_learning.get("target_1_hit_rate")
+    if target_rate is not None and target_rate < 20:
+        score -= 6
+
+    fade_signal = failed_long_signal(summary)
+    if fade_signal.get("status") == "strong_watch":
+        score -= 18
+    elif fade_signal.get("status") == "watch":
+        score -= 8
+
     if thesis.get("rating") == "Watchlist":
         score += 12
     elif thesis.get("rating") == "Deep Research Candidate":
@@ -288,9 +362,53 @@ def score_candidate(summary):
     return round(score, 2)
 
 
+def select_diversified_ideas(candidates, max_ideas, max_per_category=None):
+    max_per_category = max_per_category or int(
+        os.getenv("MORNING_BRIEF_MAX_IDEAS_PER_CATEGORY", DEFAULT_MAX_IDEAS_PER_CATEGORY)
+    )
+    selected = []
+    skipped = []
+    category_counts = {}
+    selected_ids = set()
+
+    for summary in candidates:
+        category = idea_category(summary)
+        if category_counts.get(category, 0) >= max_per_category:
+            skipped.append(summary)
+            continue
+        selected.append(summary)
+        selected_ids.add(id(summary))
+        category_counts[category] = category_counts.get(category, 0) + 1
+        if len(selected) >= max_ideas:
+            return selected
+
+    for summary in skipped:
+        if id(summary) in selected_ids:
+            continue
+        selected.append(summary)
+        if len(selected) >= max_ideas:
+            break
+
+    return selected
+
+
+def idea_category(summary):
+    watchlist = summary.get("watchlist") or {}
+    return watchlist.get("category", "Uncategorized")
+
+
+def failed_long_signal(summary):
+    source_reports = summary.get("source_reports") or {}
+    risk = source_reports.get("risk") or {}
+    return summary.get("failed_long_signal") or risk.get("failed_long_signal") or {}
+
+
 def get_reward_to_risk(summary):
     source_reports = summary.get("source_reports") or {}
     risk = source_reports.get("risk") or {}
+    calibration = risk.get("setup_calibration") or {}
+    if calibration.get("calibrated_reward_to_risk") is not None:
+        return calibration["calibrated_reward_to_risk"]
     if risk.get("reward_to_risk") is not None:
         return risk["reward_to_risk"]
     if risk.get("reward_to_risk_to_target_2") is not None:
@@ -303,6 +421,65 @@ def get_reward_to_risk(summary):
     return setup.get("reward_to_risk")
 
 
+def calculate_setup_realism(summary):
+    source_reports = summary.get("source_reports") or {}
+    technical = source_reports.get("technical") or {}
+    risk = source_reports.get("risk") or {}
+    momentum = technical.get("momentum") or {}
+    atr = momentum.get("atr_14")
+    setup = technical.get("setup") or {}
+    conditional = risk.get("conditional_plan") or {}
+
+    entry = conditional.get("suggested_entry") or risk.get("entry") or setup.get("entry_trigger")
+    stop = risk.get("stop") or setup.get("stop")
+    calibration = risk.get("setup_calibration") or {}
+    target = calibration.get("calibrated_target_1") or risk.get("target_1") or setup.get("target_1")
+
+    if not entry or not stop or not target:
+        return {
+            "rating": "unknown",
+            "message": "Missing entry, stop, or target for ATR realism check.",
+            "atr_14": atr,
+            "stop_atr": None,
+            "target_atr": None,
+        }
+    if not atr or atr <= 0:
+        return {
+            "rating": "unknown",
+            "message": "ATR unavailable; target and stop realism cannot be judged.",
+            "atr_14": atr,
+            "stop_atr": None,
+            "target_atr": None,
+        }
+
+    stop_atr = abs(float(entry) - float(stop)) / float(atr)
+    target_atr = abs(float(target) - float(entry)) / float(atr)
+
+    if stop_atr < 0.5:
+        rating = "too_tight_stop"
+        message = "Stop is inside 0.5 ATR; normal noise could trigger it."
+    elif stop_atr > 2.75:
+        rating = "too_wide_stop"
+        message = "Stop is wider than 2.75 ATR; paper risk may be too loose."
+    elif target_atr > 4.0:
+        rating = "ambitious_target"
+        message = "Target 1 is more than 4 ATR away; lower near-term hit-rate assumption."
+    elif target_atr > 3.0:
+        rating = "extended_target"
+        message = "Target 1 is 3-4 ATR away; require stronger confirmation or more time."
+    else:
+        rating = "reasonable"
+        message = "Stop and Target 1 fit a normal swing-trade volatility range."
+
+    return {
+        "rating": rating,
+        "message": message,
+        "atr_14": atr,
+        "stop_atr": stop_atr,
+        "target_atr": target_atr,
+    }
+
+
 def summarize_idea(summary):
     source_reports = summary.get("source_reports") or {}
     technical = source_reports.get("technical") or {}
@@ -310,6 +487,10 @@ def summarize_idea(summary):
     backtest = source_reports.get("backtest") or {}
     thesis = summary.get("current_thesis") or {}
     watchlist = summary.get("watchlist") or {}
+
+    calibration = risk.get("setup_calibration") or {}
+    fade_signal = summary.get("failed_long_signal") or risk.get("failed_long_signal") or {}
+    target_1 = calibration.get("calibrated_target_1") or risk.get("target_1") or (technical.get("setup") or {}).get("target_1")
 
     return {
         "symbol": summary["symbol"],
@@ -322,11 +503,19 @@ def summarize_idea(summary):
         "technical_stance": summary.get("technical_stance"),
         "risk_decision": summary.get("risk_decision"),
         "reward_to_risk": get_reward_to_risk(summary),
+        "setup_realism": calculate_setup_realism(summary),
+        "tradability": calibration.get("classification"),
+        "trade_structure_note": calibration.get("message"),
+        "partial_win_level": calibration.get("partial_win_level"),
+        "original_target_1": calibration.get("original_target_1") or risk.get("target_1") or (technical.get("setup") or {}).get("target_1"),
+        "trade_vehicle_options": risk.get("trade_vehicle_options", []),
+        "failed_long_signal": fade_signal,
+        "bearish_trade_options": fade_signal.get("possible_trade_options", []),
         "entry_trigger": risk.get("entry") or (technical.get("setup") or {}).get("entry_trigger"),
         "suggested_entry": (risk.get("conditional_plan") or {}).get("suggested_entry"),
         "condition": (risk.get("conditional_plan") or {}).get("condition"),
         "stop": risk.get("stop") or (technical.get("setup") or {}).get("stop"),
-        "target_1": risk.get("target_1") or (technical.get("setup") or {}).get("target_1"),
+        "target_1": target_1,
         "target_2": risk.get("target_2") or (technical.get("setup") or {}).get("target_2"),
         "target_3": risk.get("target_3") or (technical.get("setup") or {}).get("target_3"),
         "backtest_expectancy": backtest.get("expectancy_pct"),
@@ -366,6 +555,10 @@ def build_idea_reason(summary):
     rr = get_reward_to_risk(summary)
     if rr is not None:
         reasons.append(f"reward/risk {rr:.2f}")
+
+    realism = calculate_setup_realism(summary)
+    if realism.get("rating") in {"extended_target", "ambitious_target", "too_wide_stop", "too_tight_stop"}:
+        reasons.append(realism.get("message", "ATR realism check is unfavorable").lower())
 
     expectancy = backtest.get("expectancy_pct")
     if expectancy is not None:
@@ -423,17 +616,166 @@ def build_category_summary(summaries):
     return sorted(categories.values(), key=lambda item: item["category"])
 
 
-def collect_missing_information(summaries):
+def build_universe_balance(entries, summaries):
+    buckets = {}
+    by_symbol = {summary.get("symbol"): summary for summary in summaries}
+
+    for entry in entries:
+        symbol = entry["symbol"]
+        bucket = classify_universe_bucket(entry)
+        category = entry.get("category", "Uncategorized")
+        summary = by_symbol.get(symbol) or {}
+        decision = (summary.get("final_decision") or {}).get("status")
+
+        if bucket not in buckets:
+            buckets[bucket] = {
+                "bucket": bucket,
+                "symbols": 0,
+                "scanned": 0,
+                "paper_trade": 0,
+                "conditional": 0,
+                "watchlist": 0,
+                "no_trade": 0,
+                "needs_data": 0,
+                "errors": 0,
+                "categories": {},
+            }
+
+        buckets[bucket]["symbols"] += 1
+        buckets[bucket]["categories"][category] = buckets[bucket]["categories"].get(category, 0) + 1
+        if summary:
+            buckets[bucket]["scanned"] += 1
+        if decision == "PAPER TRADE ONLY":
+            buckets[bucket]["paper_trade"] += 1
+        elif decision == "CONDITIONAL SETUP":
+            buckets[bucket]["conditional"] += 1
+        elif decision == "WATCHLIST SETUP":
+            buckets[bucket]["watchlist"] += 1
+        elif decision == "NO TRADE":
+            buckets[bucket]["no_trade"] += 1
+        elif decision == "NEEDS DATA":
+            buckets[bucket]["needs_data"] += 1
+        elif summary:
+            buckets[bucket]["errors"] += 1
+
+    bucket_rows = sorted(buckets.values(), key=lambda item: item["symbols"], reverse=True)
+    total_symbols = sum(bucket["symbols"] for bucket in bucket_rows)
+    market_map_symbols = sum(
+        bucket["symbols"]
+        for bucket in bucket_rows
+        if bucket["bucket"] == "Market Map / Sector ETFs"
+    )
+
+    return {
+        "total_symbols": total_symbols,
+        "market_map_symbols": market_map_symbols,
+        "bucket_summary": [
+            {
+                **bucket,
+                "top_categories": top_bucket_categories(bucket["categories"]),
+            }
+            for bucket in bucket_rows
+        ],
+        "notes": build_universe_balance_notes(bucket_rows, total_symbols, market_map_symbols),
+    }
+
+
+def classify_universe_bucket(entry):
+    if entry.get("bucket"):
+        return entry["bucket"]
+
+    category = str(entry.get("category", "Uncategorized")).lower()
+    role = str(entry.get("role") or "").lower()
+
+    if role == "market_map" or "etf" in category:
+        return "Market Map / Sector ETFs"
+    if any(keyword in category for keyword in [
+        "healthcare", "utilities", "real estate", "staples", "power",
+    ]):
+        return "Defensive / Income"
+    if any(keyword in category for keyword in [
+        "energy", "industrial", "materials", "mining", "metals",
+        "machinery", "aerospace", "defense", "financial", "banks",
+        "consumer", "transport",
+    ]):
+        return "Cyclical / Value"
+    if any(keyword in category for keyword in [
+        "ai", "semiconductor", "software", "cybersecurity", "crypto",
+        "quantum", "photonics",
+    ]) or category == "space":
+        return "AI / Growth / Innovation"
+    return "Other / Special Situations"
+
+
+def top_bucket_categories(categories, limit=4):
+    ranked = sorted(categories.items(), key=lambda item: (-item[1], item[0]))
+    return [
+        {"category": category, "symbols": symbols}
+        for category, symbols in ranked[:limit]
+    ]
+
+
+def build_universe_balance_notes(bucket_rows, total_symbols, market_map_symbols):
+    if not total_symbols:
+        return ["No universe metadata available."]
+
+    notes = []
+    largest_bucket = bucket_rows[0] if bucket_rows else None
+    if largest_bucket and largest_bucket["symbols"] / total_symbols > 0.45:
+        notes.append(
+            f"Universe remains concentrated in {largest_bucket['bucket']}; "
+            "the Committee should discount crowded-theme agreement."
+        )
+    else:
+        notes.append("Universe is broad enough to compare leading themes against defensive and cyclical alternatives.")
+
+    if market_map_symbols >= 10:
+        notes.append("Market-map ETFs are available as a cross-check before single-stock recommendations.")
+    else:
+        notes.append("Market-map ETF coverage is still thin; add more sector ETFs before loosening risk gates.")
+
+    notes.append("Top idea lists are category-diversified so one theme cannot dominate the brief by score alone.")
+    return notes
+
+
+def collect_missing_information(summaries, data_health=None):
     missing = []
     seen = set()
+    suppressed = {
+        "Starter Yahoo news feed failed.",
+        "Starter Yahoo news feed failed and no Finnhub headlines were available.",
+        "Finnhub company news returned no recent headlines for this symbol.",
+        "Finnhub company news feed failed or was rate-limited.",
+        "Finnhub recommendation trend feed failed or was rate-limited.",
+        "Benzinga returned no recent market-moving headlines for this symbol.",
+    }
+
+    data_health = data_health or {}
+    domains = data_health.get("domain_scores") or {}
+    news_status = (domains.get("news_analyst") or {}).get("status")
+    if news_status == "strong":
+        suppressed.add("Benzinga is not connected; premium real-time market-moving news is unavailable.")
+        suppressed.add("Benzinga news feed failed, was rate-limited, or is not included in the current plan.")
+        suppressed.add("Benzinga analyst ratings feed failed, was rate-limited, or is not included in the current plan.")
 
     for summary in summaries:
         for item in summary.get("missing_information", []):
+            if item in suppressed:
+                continue
+            item = normalize_missing_information(item)
             if item not in seen:
                 missing.append(item)
                 seen.add(item)
 
     return missing
+
+
+def normalize_missing_information(item):
+    if item == "Backtested expectancy unavailable or sample size is zero.":
+        return "Some symbols lack enough backtest history; confidence should be discounted."
+    if item == "Backtest sample size is small; confidence should be discounted.":
+        return "Some backtest samples are small; confidence should be discounted."
+    return item
 
 
 def format_morning_brief(report):
@@ -445,6 +787,7 @@ def format_morning_brief(report):
     journal_summary = report.get("journal_summary") or {}
     core_sleeve = report.get("core_etf_sleeve") or {}
     macro_interpretation = report["macro"].get("macro_event_interpretation") or {}
+    universe_balance = report.get("universe_balance") or {}
 
     lines = [
         "# AI Hedge Fund Morning Brief",
@@ -459,6 +802,7 @@ def format_morning_brief(report):
         f"- Paper-Trade Candidates: {count_decisions(summaries, 'PAPER TRADE ONLY')}",
         f"- Conditional Setups: {count_decisions(summaries, 'CONDITIONAL SETUP')}",
         f"- Watchlist Setups: {count_decisions(summaries, 'WATCHLIST SETUP')}",
+        f"- Bearish/Fade Watch: {len(report.get('bearish_fade_watch', []))}",
         f"- No-Trade / Avoid Today: {count_decisions(summaries, 'NO TRADE')}",
         f"- Needs Data: {count_decisions(summaries, 'NEEDS DATA')}",
         "",
@@ -481,6 +825,32 @@ def format_morning_brief(report):
         f"- Status: {data_gate.get('status', 'n/a')}",
         f"- Decision: {data_gate.get('decision', 'n/a')}",
         "- Note: Full live provider checks are available with `python3 main.py data-health today`.",
+        "",
+        "## Universe Balance",
+        f"- Total Universe: {universe_balance.get('total_symbols', len(report['symbols_scanned']))} symbols",
+        f"- Market-Map ETFs: {universe_balance.get('market_map_symbols', 0)} symbols",
+    ])
+    for bucket in (universe_balance.get("bucket_summary") or [])[:6]:
+        lines.append(
+            f"- {bucket['bucket']}: {bucket['symbols']} symbols | "
+            f"paper {bucket['paper_trade']} | conditional {bucket['conditional']} | "
+            f"watchlist {bucket['watchlist']} | no trade {bucket['no_trade']}"
+        )
+        top_categories = bucket.get("top_categories") or []
+        if top_categories:
+            lines.append(
+                "  - Top categories: "
+                + ", ".join(
+                    f"{item['category']} ({item['symbols']})"
+                    for item in top_categories
+                )
+            )
+    lines.extend([
+        "",
+        "### Universe Notes",
+    ])
+    lines.extend([f"- {item}" for item in universe_balance.get("notes", [])] or ["- No universe balance notes."])
+    lines.extend([
         "",
         "## Simulated Portfolio Memory",
         f"- Open / Planned Trades: {journal_summary.get('open_trades', 0)}",
@@ -529,6 +899,17 @@ def format_morning_brief(report):
     append_idea_section(
         lines,
         report["worth_watching"],
+        empty_text="None today.",
+        show_guardrail=True,
+    )
+
+    lines.extend([
+        "",
+        f"## Bearish / Failed-Long Watch (Top {top_n})",
+    ])
+    append_idea_section(
+        lines,
+        report.get("bearish_fade_watch", []),
         empty_text="None today.",
         show_guardrail=True,
     )
@@ -599,6 +980,35 @@ def append_idea_section(lines, ideas, empty_text, show_guardrail=False):
             f"stop {format_number(idea['stop'])}, target {format_number(idea['target_1'])}, "
             f"reward/risk {format_number(idea['reward_to_risk'])}"
         )
+        if idea.get("original_target_1") and idea.get("original_target_1") != idea.get("target_1"):
+            lines.append(
+                f"   - Target calibration: first target {format_number(idea.get('target_1'))}; "
+                f"stretch target {format_number(idea.get('original_target_1'))}"
+            )
+        if idea.get("partial_win_level"):
+            lines.append(f"   - Partial-win level: {format_number(idea.get('partial_win_level'))}")
+        if idea.get("tradability"):
+            lines.append(
+                f"   - Tradability: {idea.get('tradability')} - "
+                f"{idea.get('trade_structure_note') or 'n/a'}"
+            )
+        fade_signal = idea.get("failed_long_signal") or {}
+        if fade_signal.get("status") in {"watch", "strong_watch"}:
+            lines.append(
+                f"   - Failed-long/fade watch: {fade_signal.get('status')} "
+                f"(score {format_number(fade_signal.get('score'))}) - {fade_signal.get('summary')}"
+            )
+            evidence = fade_signal.get("evidence") or []
+            if evidence:
+                lines.append(f"   - Fade evidence: {evidence[0]}")
+        realism = idea.get("setup_realism") or {}
+        if realism:
+            lines.append(
+                f"   - ATR realism: {realism.get('rating', 'unknown')} "
+                f"(stop {format_number(realism.get('stop_atr'))} ATR, "
+                f"target {format_number(realism.get('target_atr'))} ATR) - "
+                f"{realism.get('message', 'n/a')}"
+            )
         if idea.get("condition"):
             lines.append(f"   - Condition: {idea['condition']}")
         if idea.get("target_2") or idea.get("target_3"):
@@ -606,6 +1016,26 @@ def append_idea_section(lines, ideas, empty_text, show_guardrail=False):
                 f"   - Extra targets: target 2 {format_number(idea.get('target_2'))}, "
                 f"target 3 {format_number(idea.get('target_3'))}"
             )
+        vehicle_options = [
+            option for option in idea.get("trade_vehicle_options", [])
+            if option.get("status") in {"conditional", "preferred_for_broad_theme", "consider", "not_execution_ready"}
+        ]
+        if vehicle_options:
+            vehicle_text = "; ".join(
+                f"{option.get('vehicle')} ({option.get('status')})"
+                for option in vehicle_options[:3]
+            )
+            lines.append(f"   - Other trade options: {vehicle_text}")
+        bearish_options = [
+            option for option in idea.get("bearish_trade_options", [])
+            if option.get("status") in {"preferred_risk_control", "watch_only", "watch_only_high_premium_risk", "watch_only_high_risk"}
+        ]
+        if bearish_options:
+            bearish_text = "; ".join(
+                f"{option.get('vehicle')} ({option.get('status')})"
+                for option in bearish_options[:3]
+            )
+            lines.append(f"   - Bearish/fade options: {bearish_text}")
         lines.append(
             f"   - Backtest: expectancy {format_number(idea['backtest_expectancy'])}%, "
             f"sample {idea['backtest_sample_size'] if idea['backtest_sample_size'] is not None else 'n/a'}"

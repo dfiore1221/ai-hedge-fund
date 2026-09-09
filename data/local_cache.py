@@ -6,6 +6,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CACHE_DIR = PROJECT_ROOT / "data_cache"
+_NAMESPACE_PAYLOAD_CACHE = {}
 
 
 def get_cached_json(namespace, key, ttl_seconds):
@@ -57,6 +58,54 @@ def get_stale_cached_json(namespace, key, max_age_seconds=None):
     return data
 
 
+def get_latest_stale_cached_json_by_prefix(namespace, key_prefix, max_age_seconds=None):
+    candidates = []
+    for payload in cached_namespace_payloads(namespace):
+        if not str(payload.get("key", "")).startswith(key_prefix):
+            continue
+        cached_at = parse_timestamp(payload.get("cached_at"))
+        if max_age_seconds and cached_at:
+            age_seconds = (datetime.now() - cached_at).total_seconds()
+            if age_seconds > max_age_seconds:
+                continue
+        candidates.append((cached_at or datetime.min, payload))
+
+    if not candidates:
+        return None
+
+    _, payload = max(candidates, key=lambda item: item[0])
+    data = payload.get("data")
+    if isinstance(data, dict):
+        data = {
+            **data,
+            "cache": {
+                "status": "stale_fallback",
+                "cached_at": payload.get("cached_at"),
+                "matched_key": payload.get("key"),
+            },
+        }
+    return data
+
+
+def cached_namespace_payloads(namespace):
+    safe_namespace = sanitize_segment(namespace)
+    namespace_dir = CACHE_DIR / safe_namespace
+    if safe_namespace in _NAMESPACE_PAYLOAD_CACHE:
+        return _NAMESPACE_PAYLOAD_CACHE[safe_namespace]
+    if not namespace_dir.exists():
+        _NAMESPACE_PAYLOAD_CACHE[safe_namespace] = []
+        return []
+
+    payloads = []
+    for path in namespace_dir.glob("*.json"):
+        try:
+            payloads.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            continue
+    _NAMESPACE_PAYLOAD_CACHE[safe_namespace] = payloads
+    return payloads
+
+
 def set_cached_json(namespace, key, data):
     path = cache_path(namespace, key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -67,6 +116,7 @@ def set_cached_json(namespace, key, data):
         "data": data,
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    _NAMESPACE_PAYLOAD_CACHE.pop(sanitize_segment(namespace), None)
     return path
 
 

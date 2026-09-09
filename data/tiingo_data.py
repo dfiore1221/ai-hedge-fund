@@ -5,7 +5,13 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-from data.local_cache import get_cached_json, get_stale_cached_json, set_cached_json, ttl_seconds
+from data.local_cache import (
+    get_cached_json,
+    get_latest_stale_cached_json_by_prefix,
+    get_stale_cached_json,
+    set_cached_json,
+    ttl_seconds,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -13,10 +19,11 @@ ENV_PATH = PROJECT_ROOT / ".env"
 TIINGO_INTRADAY_BASE_URL = "https://api.tiingo.com/tiingo/equity/intraday"
 TIINGO_DAILY_BASE_URL = "https://api.tiingo.com/tiingo/daily"
 DEFAULT_TIMEOUT = 15
-LATEST_PRICE_TTL_SECONDS = ttl_seconds(minutes=5)
+LATEST_PRICE_TTL_SECONDS = ttl_seconds(minutes=15)
 DAILY_PRICE_TTL_SECONDS = ttl_seconds(hours=6)
-STALE_FALLBACK_SECONDS = ttl_seconds(hours=2)
+STALE_FALLBACK_SECONDS = ttl_seconds(hours=8)
 DAILY_STALE_FALLBACK_SECONDS = ttl_seconds(days=3)
+_DAILY_RATE_LIMITED_UNTIL = None
 
 
 def get_tiingo_api_key():
@@ -61,6 +68,10 @@ def fetch_latest_equity_prices(symbols):
             prices[symbol] = result["price"]
         else:
             errors[symbol] = result.get("error") or result.get("status")
+            fallback = latest_price_from_daily(symbol)
+            if fallback:
+                prices[symbol] = fallback
+                errors[symbol] = f"{errors[symbol]}; using daily fallback"
 
     if not prices:
         stale = get_stale_cached_json("tiingo", cache_key, STALE_FALLBACK_SECONDS)
@@ -84,7 +95,7 @@ def fetch_latest_equity_prices(symbols):
         "symbol_count": len(symbols),
         "price_count": len(prices),
         "errors": errors,
-        "cache": {"status": "fresh"},
+        "cache": {"status": "fresh", "ttl_minutes": 15},
     }
     set_cached_json("tiingo", cache_key, result)
     return result
@@ -128,11 +139,40 @@ def fetch_latest_equity_price(symbol, api_key):
             "low": safe_float(item.get("low")),
             "volume": safe_int(item.get("volume")),
             "source_field": price_source_field(item),
+            "freshness": "intraday_or_latest",
         },
     }
 
 
+def latest_price_from_daily(symbol):
+    daily = fetch_daily_equity_prices(symbol, period="10d")
+    rows = daily.get("rows") or []
+    if daily.get("status") not in {"ok", "empty"} or not rows:
+        return None
+
+    row = rows[-1]
+    close = safe_float(row.get("close"))
+    if close is None:
+        return None
+
+    return {
+        "symbol": symbol.upper(),
+        "provider": "Tiingo",
+        "timestamp": row.get("date"),
+        "close": close,
+        "open": safe_float(row.get("open")),
+        "high": safe_float(row.get("high")),
+        "low": safe_float(row.get("low")),
+        "volume": safe_int(row.get("volume")),
+        "source_field": "daily_close",
+        "freshness": "daily_fallback",
+        "fallback_reason": "latest quote unavailable or rate-limited",
+        "daily_cache": daily.get("cache"),
+    }
+
+
 def fetch_daily_equity_prices(symbol, period="6mo"):
+    global _DAILY_RATE_LIMITED_UNTIL
     symbol = symbol.upper().strip()
     api_key = get_tiingo_api_key()
     if not symbol:
@@ -156,9 +196,15 @@ def fetch_daily_equity_prices(symbol, period="6mo"):
 
     start_date = period_start_date(period)
     cache_key = f"daily-equity-prices:{symbol}:{period}:{start_date}"
+    fallback_key_prefix = f"daily-equity-prices:{symbol}:{period}:"
+    symbol_fallback_key_prefix = f"daily-equity-prices:{symbol}:"
     cached = get_cached_json("tiingo", cache_key, DAILY_PRICE_TTL_SECONDS)
     if cached:
         return cached
+
+    if _DAILY_RATE_LIMITED_UNTIL and datetime.now() < _DAILY_RATE_LIMITED_UNTIL:
+        stale = get_stale_daily_cache(cache_key, fallback_key_prefix, symbol_fallback_key_prefix)
+        return stale or build_daily_error(symbol, "Tiingo daily rate limit is active; skipped live request.", status_code=429)
 
     headers = {
         "Authorization": f"Token {api_key}",
@@ -178,10 +224,12 @@ def fetch_daily_equity_prices(symbol, period="6mo"):
         )
         response.raise_for_status()
     except requests.HTTPError as exc:
-        stale = get_stale_cached_json("tiingo", cache_key, DAILY_STALE_FALLBACK_SECONDS)
+        if getattr(exc.response, "status_code", None) == 429:
+            _DAILY_RATE_LIMITED_UNTIL = datetime.now() + timedelta(minutes=10)
+        stale = get_stale_daily_cache(cache_key, fallback_key_prefix, symbol_fallback_key_prefix)
         return stale or build_daily_error(symbol, exc, response=exc.response)
     except requests.RequestException as exc:
-        stale = get_stale_cached_json("tiingo", cache_key, DAILY_STALE_FALLBACK_SECONDS)
+        stale = get_stale_daily_cache(cache_key, fallback_key_prefix, symbol_fallback_key_prefix)
         return stale or build_daily_error(symbol, exc)
 
     payload = response.json()
@@ -203,6 +251,18 @@ def fetch_daily_equity_prices(symbol, period="6mo"):
     }
     set_cached_json("tiingo", cache_key, result)
     return result
+
+
+def get_stale_daily_cache(cache_key, fallback_key_prefix, symbol_fallback_key_prefix=None):
+    return (
+        get_stale_cached_json("tiingo", cache_key, DAILY_STALE_FALLBACK_SECONDS)
+        or get_latest_stale_cached_json_by_prefix("tiingo", fallback_key_prefix, DAILY_STALE_FALLBACK_SECONDS)
+        or (
+            get_latest_stale_cached_json_by_prefix("tiingo", symbol_fallback_key_prefix, DAILY_STALE_FALLBACK_SECONDS)
+            if symbol_fallback_key_prefix
+            else None
+        )
+    )
 
 
 def normalize_daily_row(item):
@@ -235,8 +295,8 @@ def period_start_date(period):
     return (today - delta).isoformat()
 
 
-def build_daily_error(symbol, error, response=None):
-    status_code = getattr(response, "status_code", None)
+def build_daily_error(symbol, error, response=None, status_code=None):
+    status_code = status_code if status_code is not None else getattr(response, "status_code", None)
     message = str(error)
     if status_code == 401:
         message = "Tiingo rejected the API token."

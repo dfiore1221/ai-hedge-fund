@@ -116,7 +116,7 @@ SYMBOL_ALIASES = {
 }
 
 
-def collect_overnight_news(ticker, limit=10):
+def collect_overnight_news(ticker, limit=10, include_recommendation_trends=True):
     ticker = ticker.upper().strip()
     benzinga_configured = is_benzinga_configured()
     finnhub_configured = is_finnhub_configured()
@@ -185,7 +185,7 @@ def collect_overnight_news(ticker, limit=10):
         analyst_actions.extend(normalize_benzinga_ratings(benzinga_ratings.get("items", [])))
 
     finnhub_recommendations = {"status": "not_configured", "items": []}
-    if finnhub_configured:
+    if finnhub_configured and include_recommendation_trends:
         finnhub_recommendations = fetch_recommendation_trends(ticker)
         provider_status.append({
             "name": "Finnhub Recommendations",
@@ -193,6 +193,12 @@ def collect_overnight_news(ticker, limit=10):
             "detail": build_provider_detail(finnhub_recommendations, "recommendation trends"),
         })
         analyst_actions.extend(normalize_finnhub_recommendations(finnhub_recommendations.get("items", [])))
+    elif finnhub_configured:
+        provider_status.append({
+            "name": "Finnhub Recommendations",
+            "status": "skipped",
+            "detail": "Skipped during broad morning scan to avoid slow provider calls.",
+        })
     analyst_actions = dedupe_analyst_actions(analyst_actions)
 
     summary = summarize_news(items, analyst_actions)
@@ -204,9 +210,9 @@ def collect_overnight_news(ticker, limit=10):
         finnhub_news,
         finnhub_recommendations,
     )
-    if yahoo_error and not finnhub_configured:
+    if yahoo_error and not items and not benzinga_configured and not finnhub_configured:
         missing_information.append("Starter Yahoo news feed failed.")
-    elif yahoo_error and not items:
+    elif yahoo_error and not items and not benzinga_configured:
         missing_information.append("Starter Yahoo news feed failed and no Finnhub headlines were available.")
 
     return {
@@ -701,7 +707,7 @@ def build_missing_information(
     if benzinga_configured and not benzinga_ratings_ok:
         missing.append("Benzinga analyst ratings feed failed, was rate-limited, or is not included in the current plan.")
 
-    if not finnhub_configured:
+    if not finnhub_configured and not benzinga_configured:
         missing.append("Finnhub is not connected; using Yahoo starter headlines and analyst actions only.")
     elif finnhub_news.get("status") not in {"ok", "empty"}:
         missing.append("Finnhub company news feed failed or was rate-limited.")

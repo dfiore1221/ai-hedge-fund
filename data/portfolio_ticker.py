@@ -3,7 +3,7 @@ import os
 import socket
 from datetime import datetime
 
-from data.paper_fills import fetch_price_map
+from data.paper_fills import fetch_price_snapshot
 from data.paper_ledger import build_paper_ledger
 from data.trade_journal import (
     OPEN_STATUSES,
@@ -19,11 +19,17 @@ def build_portfolio_ticker_status(refresh_prices=True, save_prices=True):
     journal = load_trade_journal()
     price_errors = []
     refreshed_symbols = []
+    price_sources = {}
 
     if refresh_prices and not journal.empty:
         symbols = open_symbols(journal)
         try:
-            prices = fetch_price_map(symbols)
+            price_snapshot = fetch_price_snapshot(symbols)
+            prices = price_snapshot.get("prices", {})
+            price_sources = price_snapshot.get("metadata", {})
+            provider_errors = price_snapshot.get("provider_errors") or {}
+            if provider_errors:
+                price_errors.extend(f"{symbol}: {message}" for symbol, message in provider_errors.items())
         except Exception as exc:
             prices = {}
             price_errors.append(str(exc))
@@ -65,6 +71,11 @@ def build_portfolio_ticker_status(refresh_prices=True, save_prices=True):
         "open_risk": account["open_risk"],
         "symbols": open_symbols(journal),
         "refreshed_symbols": sorted(set(refreshed_symbols)),
+        "price_sources": price_sources,
+        "fallback_symbols": sorted([
+            symbol for symbol, item in price_sources.items()
+            if item.get("freshness") and item.get("freshness") != "intraday_or_latest"
+        ]),
         "price_errors": price_errors,
         "dashboard_url": f"http://localhost:{dashboard_port}",
         "warnings": ledger.get("warnings", []),

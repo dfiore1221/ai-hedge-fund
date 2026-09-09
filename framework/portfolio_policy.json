@@ -1,0 +1,64 @@
+{
+  "version": "1.0",
+  "description": "Professional portfolio controls for the AIFundOS paper portfolio.",
+  "rebalance": {
+    "review_cadence": "weekly_or_when_band_breached",
+    "core_sleeve_drift_band_pct": 0.05,
+    "security_weight_band_pct": 0.03,
+    "minimum_action_notional": 100.0,
+    "off_hours_execution": "blocked_for_realism"
+  },
+  "risk_limits": {
+    "cash_reserve_min_pct": 0.2,
+    "max_single_name_pct": 0.1,
+    "max_single_etf_pct": 0.25,
+    "max_sector_pct": 0.35,
+    "max_growth_bucket_pct": 0.45,
+    "max_open_planned_risk_pct": 0.03,
+    "warning_drawdown_pct": -0.03,
+    "hard_drawdown_pct": -0.06,
+    "hedge_review_drawdown_pct": -0.04,
+    "hedge_review_growth_bucket_pct": 0.45
+  },
+  "execution_assumptions": {
+    "commission_per_trade": 0.0,
+    "slippage_bps_equity": 5,
+    "spread_bps_equity": 8,
+    "slippage_bps_etf": 2,
+    "spread_bps_etf": 3,
+    "tax_model": "paper_tracking_only_not_tax_advice",
+    "dividend_model": "not_accrued_yet"
+  },
+  "beta_assumptions": {
+    "Broad Market ETF": 1.0,
+    "Growth Index ETF": 1.15,
+    "Blue Chip ETF": 0.95,
+    "Small Cap ETF": 1.2,
+    "Sector ETF - Technology": 1.18,
+    "Sector ETF - Financials": 1.05,
+    "Sector ETF - Energy": 0.95,
+    "Sector ETF - Healthcare": 0.75,
+    "Sector ETF - Industrials": 1.05,
+    "Sector ETF - Utilities": 0.6,
+    "Sector ETF - Consumer Staples": 0.65,
+    "Sector ETF - Consumer Discretionary": 1.1,
+    "Sector ETF - Materials": 1.05,
+    "Sector ETF - Real Estate": 0.85,
+    "Sector ETF - Communication Services": 1.05,
+    "Real Estate ETF": 0.85,
+    "Regional Bank ETF": 1.25,
+    "Homebuilder ETF": 1.2,
+    "Transport ETF": 1.05,
+    "Core ETF - S&P 500": 1.0,
+    "Core ETF - Nasdaq 100": 1.15,
+    "Core ETF - Semiconductors": 1.25,
+    "Core ETF - Healthcare": 0.75,
+    "Core ETF - Energy": 0.95,
+    "Core ETF - T-Bills": 0.05
+  },
+  "notes": [
+    "Rules are for paper portfolio supervision only.",
+    "Core ETF sleeve trades are governed by allocation drift and portfolio risk, not tactical profit targets.",
+    "Hedge recommendations are review prompts only until a paper hedge workflow is explicitly built."
+  ]
+}

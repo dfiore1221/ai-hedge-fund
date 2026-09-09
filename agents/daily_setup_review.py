@@ -151,6 +151,9 @@ def review_setup_idea(idea, review_date):
     entry = preferred_entry(idea)
     stop = to_float(idea.get("stop"))
     target_1 = to_float(idea.get("target_1"))
+    partial_win_level = to_float(idea.get("partial_win_level"))
+    if partial_win_level is None and entry and stop:
+        partial_win_level = calculate_partial_win_level(side, entry, stop)
 
     base = {
         "symbol": symbol,
@@ -163,11 +166,14 @@ def review_setup_idea(idea, review_date):
         "entry": entry,
         "stop": stop,
         "target_1": target_1,
+        "partial_win_level": partial_win_level,
         "entered": False,
         "hit_target_1": False,
+        "hit_partial_win": False,
         "hit_stop": False,
         "result": "UNREVIEWABLE",
         "entry_time": "",
+        "partial_win_time": "",
         "exit_time": "",
         "pnl_pct": None,
         "max_favorable_move_pct": None,
@@ -227,6 +233,7 @@ def review_with_intraday(base, intraday):
     entry = base["entry"]
     stop = base["stop"]
     target_1 = base["target_1"]
+    partial_win_level = base.get("partial_win_level")
     side = base["side"]
 
     base.update(day_summary(intraday))
@@ -259,6 +266,9 @@ def review_with_intraday(base, intraday):
             base["exit_time"] = timestamp.strftime("%H:%M")
             base["pnl_pct"] = round(pnl_pct(side, entry, stop), 2)
             return base
+        if partial_win_level and not base["hit_partial_win"] and target_hit_bar(bar, side, partial_win_level):
+            base["hit_partial_win"] = True
+            base["partial_win_time"] = timestamp.strftime("%H:%M")
         if target_hit_bar(bar, side, target_1):
             base["hit_target_1"] = True
             base["result"] = "TARGET 1 HIT"
@@ -272,7 +282,10 @@ def review_with_intraday(base, intraday):
     base["result"] = "OPEN / NO TARGET 1"
     base["swing_status"] = "active_swing"
     base["follow_up_required"] = True
-    base["follow_up_reason"] = "Entry triggered but neither stop nor target was hit; treat as an active multi-day swing setup."
+    if base["hit_partial_win"]:
+        base["follow_up_reason"] = "Entry triggered and reached the partial-win checkpoint; continue tracking for Target 1 or trailing rules."
+    else:
+        base["follow_up_reason"] = "Entry triggered but neither stop nor target was hit; treat as an active multi-day swing setup."
     base["pnl_pct"] = round(pnl_pct(side, entry, base["day_close"]), 2)
     return base
 
@@ -297,8 +310,10 @@ def review_with_daily_bar(base, symbol, review_date):
     base.update(day_summary(daily))
     base["data_source"] = "Yahoo Finance / yfinance daily fallback"
     base["entered"] = entry_hit(daily, base["side"], base["entry"]).any()
-    base["hit_target_1"] = target_hit(daily, base["side"], base["target_1"])
-    base["hit_stop"] = stop_hit(daily, base["side"], base["stop"])
+    base["hit_target_1"] = base["entered"] and target_hit(daily, base["side"], base["target_1"])
+    if base["entered"] and base.get("partial_win_level"):
+        base["hit_partial_win"] = target_hit(daily, base["side"], base["partial_win_level"])
+    base["hit_stop"] = base["entered"] and stop_hit(daily, base["side"], base["stop"])
     base["result"] = classify_daily_result(base)
     base["swing_status"] = classify_swing_status(base)
     base["follow_up_required"] = base["swing_status"] in {"active_swing", "not_triggered", "ambiguous"}
@@ -360,8 +375,9 @@ def swing_follow_up_reason(setup):
 
 def summarize_reviews(reviews):
     entered = [item for item in reviews if item["entered"]]
-    target_hits = [item for item in reviews if item["hit_target_1"]]
-    stops = [item for item in reviews if item["hit_stop"]]
+    target_hits = [item for item in entered if item["hit_target_1"]]
+    partial_hits = [item for item in entered if item.get("hit_partial_win")]
+    stops = [item for item in entered if item["hit_stop"]]
     no_entries = [item for item in reviews if item["result"] == "NO ENTRY"]
     pnl_values = [item["pnl_pct"] for item in entered if item["pnl_pct"] is not None]
 
@@ -373,6 +389,7 @@ def summarize_reviews(reviews):
         "setups_reviewed": len(reviews),
         "entries_triggered": len(entered),
         "target_1_hits": len(target_hits),
+        "partial_win_hits": len(partial_hits),
         "stop_hits": len(stops),
         "no_entries": len(no_entries),
         "active_swings": sum(1 for item in reviews if item.get("swing_status") == "active_swing"),
@@ -392,6 +409,10 @@ def build_self_review_lessons(reviews):
     if summary["target_1_hits"] == 0 and summary["entries_triggered"] > 0:
         lessons.append(
             "No entered setup reached Target 1 today. This is not a failure by itself because the intended horizon is multi-day swing trading."
+        )
+    if summary.get("partial_win_hits", 0) > 0:
+        lessons.append(
+            f"{summary['partial_win_hits']} setup(s) reached the partial-win checkpoint; use this to separate useful direction from overly ambitious full targets."
         )
     if summary["active_swings"] > 0:
         lessons.append(
@@ -467,6 +488,7 @@ def format_daily_setup_review(report):
         f"- Setups Reviewed: {summary['setups_reviewed']}",
         f"- Entries Triggered: {summary['entries_triggered']}",
         f"- Target 1 Hits: {summary['target_1_hits']}",
+        f"- Partial-Win Hits: {summary.get('partial_win_hits', 0)}",
         f"- Stop Hits: {summary['stop_hits']}",
         f"- No Entries: {summary['no_entries']}",
         f"- Active Multi-Day Swings: {summary.get('active_swings', 0)}",
@@ -475,14 +497,15 @@ def format_daily_setup_review(report):
         f"- Dominant Result: {summary['dominant_result']}",
         "",
         "## Setup Results",
-        "| Rank | Symbol | Decision | Entry | Stop | Target 1 | Day High | Day Low | Close | Swing Status | Result | P&L From Entry | Follow-Up |",
-        "|---:|---|---|---:|---:|---:|---:|---:|---:|---|---|---:|---|",
+        "| Rank | Symbol | Decision | Entry | Stop | Partial | Target 1 | Day High | Day Low | Close | Swing Status | Result | P&L From Entry | Follow-Up |",
+        "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|---:|---|",
     ]
 
     for index, setup in enumerate(report["reviewed_setups"], start=1):
         lines.append(
             f"| {index} | {setup['display_symbol']} | {setup.get('decision', '')} | "
-            f"{fmt(setup.get('entry'))} | {fmt(setup.get('stop'))} | {fmt(setup.get('target_1'))} | "
+            f"{fmt(setup.get('entry'))} | {fmt(setup.get('stop'))} | "
+            f"{fmt(setup.get('partial_win_level'))} | {fmt(setup.get('target_1'))} | "
             f"{fmt(setup.get('day_high'))} | {fmt(setup.get('day_low'))} | {fmt(setup.get('day_close'))} | "
             f"{setup.get('swing_status', 'n/a')} | {setup['result']} | {fmt_pct(setup.get('pnl_pct'))} | "
             f"{'yes' if setup.get('follow_up_required') else 'no'} |"
@@ -567,6 +590,15 @@ def target_hit_bar(bar, side, target):
 
 def stop_hit_bar(bar, side, stop):
     return float(bar["High"]) >= stop if side == "short" else float(bar["Low"]) <= stop
+
+
+def calculate_partial_win_level(side, entry, stop, r_multiple=0.5):
+    risk_per_share = abs(float(entry) - float(stop))
+    if risk_per_share <= 0:
+        return None
+    if side == "short":
+        return float(entry) - (risk_per_share * r_multiple)
+    return float(entry) + (risk_per_share * r_multiple)
 
 
 def max_favorable_move_pct(frame, side, entry):

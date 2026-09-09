@@ -20,6 +20,7 @@ from data.finnhub_data import (
 from data.fred_data import get_fred_macro_snapshot
 from data.local_cache import cache_summary
 from data.market_data import get_price_history
+from data.quiver_data import fetch_quiver_off_exchange, is_quiver_configured
 from data.tiingo_data import fetch_latest_equity_prices, is_tiingo_configured
 
 
@@ -88,6 +89,13 @@ PROVIDER_CONFIGS = [
         "note": "Best candidate for trader-grade overnight news.",
     },
     {
+        "name": "Quiver",
+        "domain": "alternative data: off-exchange trading, political/government datasets, and higher-tier ownership/crowding signals",
+        "env_key": "QUIVER_API_KEY",
+        "status_when_missing": "not_configured",
+        "note": "Optional alternative-data layer; free/Hobbyist access is useful but does not replace Trader-tier ownership/crowding data.",
+    },
+    {
         "name": "Finnhub",
         "domain": "company news, earnings, estimates, fundamentals",
         "env_key": "FINNHUB_API_KEY",
@@ -133,6 +141,7 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
     fred_snapshot = get_fred_macro_snapshot()
     economic_calendar = get_economic_calendar()
     news_check = check_news_provider(symbols[0]) if symbols else {"status": "skipped"}
+    alternative_data_check = check_alternative_data_provider(symbols[0]) if symbols else {"status": "skipped"}
     live_price_checks = []
     market_price_check = {"status": "skipped", "prices": {}, "comparisons": []}
 
@@ -168,6 +177,7 @@ def generate_data_health_report(symbols=None, live_checks=True, live_check_limit
         "official_macro": fred_snapshot,
         "economic_calendar": economic_calendar,
         "starter_news_check": news_check,
+        "alternative_data_check": alternative_data_check,
         "cache": cache_summary(),
         "domain_scores": domain_scores,
         "data_quality_score": quality_score,
@@ -382,6 +392,41 @@ def check_news_provider(symbol):
     return check_yahoo_news(symbol)
 
 
+def check_alternative_data_provider(symbol):
+    if not is_quiver_configured():
+        return {
+            "symbol": symbol,
+            "provider": "Quiver Quantitative",
+            "status": "not_configured",
+            "message": "QUIVER_API_KEY is not configured.",
+            "item_count": 0,
+        }
+
+    response = fetch_quiver_off_exchange(symbol, limit=5)
+    status = response.get("status")
+    if status in {"ok", "empty"}:
+        return {
+            "symbol": symbol,
+            "provider": "Quiver Quantitative",
+            "status": "ok",
+            "dataset": response.get("dataset"),
+            "item_count": response.get("item_count", len(response.get("items", []))),
+            "message": (
+                f"Quiver {response.get('dataset')} returned "
+                f"{response.get('item_count', len(response.get('items', [])))} records."
+            ),
+        }
+
+    return {
+        "symbol": symbol,
+        "provider": "Quiver Quantitative",
+        "status": status or "error",
+        "dataset": response.get("dataset"),
+        "item_count": 0,
+        "message": response.get("error", status or "Quiver check failed."),
+    }
+
+
 def build_benzinga_news_check_message(news, ratings):
     parts = []
     if news.get("status") == "ok":
@@ -498,15 +543,18 @@ def score_domains(
         market_provider_working and market_price_check.get("agreement_status") == "ok"
     )
     premium_news_provider_configured = bool({"Benzinga", "Finnhub"} & configured_names)
+    premium_news_provider_live = bool(
+        premium_news_provider_configured
+        and news_check
+        and news_check.get("provider") in {"Benzinga", "Finnhub"}
+        and news_check.get("status") == "ok"
+    )
     starter_news_available = bool(news_check and news_check.get("status") == "ok")
-    news_provider_configured = premium_news_provider_configured or starter_news_available
+    news_provider_configured = premium_news_provider_live or starter_news_available
     economic_calendar_ok = bool(
         economic_calendar and economic_calendar.get("status") in {"ok", "partial"}
     )
-    event_provider_configured = (
-        economic_calendar_ok
-        or bool({"Finnhub", "Benzinga"} & configured_names)
-    )
+    event_provider_configured = economic_calendar_ok or bool({"Finnhub", "Benzinga"} & configured_names)
     options_provider_configured = bool({"Intrinio", "Tradier", "ORATS"} & configured_names)
     fred_ok = bool(fred_snapshot and fred_snapshot.get("status") in {"ok", "partial"})
     macro_provider_configured = fred_ok or economic_calendar_ok
@@ -532,15 +580,15 @@ def score_domains(
             "detail": build_reference_data_detail(sec_configured, market_provider_working),
         },
         "earnings_events": {
-            "score": 15 if event_provider_configured else 5,
+            "score": 15 if economic_calendar_ok else 10 if event_provider_configured else 5,
             "max_score": 15,
-            "status": "strong" if event_provider_configured else "starter",
+            "status": "strong" if economic_calendar_ok else "configured_unverified" if event_provider_configured else "starter",
             "detail": build_event_context_detail(economic_calendar, event_provider_configured),
         },
         "news_analyst": {
-            "score": 15 if premium_news_provider_configured else 8 if starter_news_available else 5,
+            "score": 15 if premium_news_provider_live else 9 if premium_news_provider_configured else 8 if starter_news_available else 5,
             "max_score": 15,
-            "status": "strong" if premium_news_provider_configured else "starter_live" if starter_news_available else "starter",
+            "status": "strong" if premium_news_provider_live else "configured_unverified" if premium_news_provider_configured else "starter_live" if starter_news_available else "starter",
             "detail": build_news_context_detail(news_check, premium_news_provider_configured),
         },
         "options": {
@@ -878,6 +926,18 @@ def format_data_health_report(report):
         lines.append(
             f"- {news_check.get('symbol', 'n/a')}: {news_check.get('status')} - {news_check.get('message', 'n/a')}"
         )
+    else:
+        lines.append("- Not checked.")
+
+    lines.extend(["", "## Alternative Data Check"])
+    alternative_check = report.get("alternative_data_check") or {}
+    if alternative_check.get("status"):
+        lines.append(
+            f"- {alternative_check.get('provider', 'Alternative data')}: "
+            f"{alternative_check.get('status')} for {alternative_check.get('symbol', 'n/a')} "
+            f"({alternative_check.get('item_count', 0)} records)."
+        )
+        lines.append(f"- Detail: {alternative_check.get('message', 'n/a')}")
     else:
         lines.append("- Not checked.")
 

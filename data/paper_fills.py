@@ -13,16 +13,30 @@ from data.trade_journal import (
 )
 
 
-def process_paper_fills(frame=None, price_map=None, apply=False):
+def process_paper_fills(frame=None, price_map=None, apply=False, allow_entry_fills=True, allow_exit_fills=True):
     """Evaluate simulated limit/stop/target rules against latest prices."""
+    exit_order_result = process_human_exit_orders(apply=apply, price_map=price_map)
     journal = enrich_trade_metrics(frame if frame is not None else load_trade_journal())
     symbols = symbols_to_check(journal)
-    prices = price_map or fetch_price_map(symbols)
+    price_snapshot = {"prices": price_map or {}, "metadata": {}, "provider_status": "manual"}
+    if price_map is None:
+        price_snapshot = fetch_price_snapshot(symbols)
+    prices = price_snapshot["prices"]
     now = datetime.now().isoformat(timespec="seconds")
     events = []
+    applied_events = []
     updated = journal.copy()
+    human_exit_trade_ids = {
+        str(event.get("trade_id", ""))
+        for event in exit_order_result.get("events", [])
+        if event.get("trade_id")
+    }
 
     for index, row in updated.iterrows():
+        trade_id = str(row.get("id", ""))
+        if trade_id in human_exit_trade_ids:
+            continue
+
         symbol = str(row.get("symbol", "")).upper().strip()
         if not symbol or symbol not in prices:
             continue
@@ -52,20 +66,36 @@ def process_paper_fills(frame=None, price_map=None, apply=False):
             continue
 
         events.append(event)
-        if apply:
+        is_entry = event.get("event_type") == "entry_fill"
+        is_exit = event.get("event_type") == "exit_fill"
+        can_apply = (is_entry and allow_entry_fills) or (is_exit and allow_exit_fills)
+        if apply and can_apply:
             apply_event(updated, index, event)
+            applied_events.append(event)
 
     updated = enrich_trade_metrics(updated)
-    if apply and events:
+    if apply and applied_events:
         save_trade_journal(updated)
 
     return {
         "applied": bool(apply),
+        "allow_entry_fills": bool(allow_entry_fills),
+        "allow_exit_fills": bool(allow_exit_fills),
+        "exit_order_result": exit_order_result,
         "events": events,
+        "applied_events": applied_events,
         "prices": prices,
+        "price_metadata": price_snapshot.get("metadata", {}),
+        "price_provider_status": price_snapshot.get("provider_status", ""),
         "checked_symbols": symbols,
         "journal": updated,
     }
+
+
+def process_human_exit_orders(apply=False, price_map=None):
+    from data.exit_orders import process_exit_orders
+
+    return process_exit_orders(apply=apply, price_map=price_map)
 
 
 def symbols_to_check(journal):
@@ -83,20 +113,54 @@ def symbols_to_check(journal):
 
 
 def fetch_price_map(symbols):
+    return fetch_price_snapshot(symbols)["prices"]
+
+
+def fetch_price_snapshot(symbols):
     if not symbols:
-        return {}
+        return {"prices": {}, "metadata": {}, "provider_status": "skipped"}
 
     if is_tiingo_configured():
         response = fetch_latest_equity_prices(symbols)
         prices = {}
+        metadata = {}
         for symbol, item in response.get("prices", {}).items():
             close = item.get("close") if isinstance(item, dict) else None
             if close is not None:
-                prices[symbol.upper()] = float(close)
+                normalized = symbol.upper()
+                prices[normalized] = float(close)
+                metadata[normalized] = {
+                    "provider": item.get("provider", response.get("provider")),
+                    "timestamp": item.get("timestamp"),
+                    "freshness": item.get("freshness", "unknown"),
+                    "source_field": item.get("source_field"),
+                    "cache": response.get("cache"),
+                    "fallback_reason": item.get("fallback_reason", ""),
+                }
         if prices:
-            return prices
+            return {
+                "prices": prices,
+                "metadata": metadata,
+                "provider_status": response.get("status", "ok"),
+                "provider_errors": response.get("errors", {}),
+            }
 
-    return fetch_latest_prices(symbols)
+    fallback_prices = fetch_latest_prices(symbols)
+    return {
+        "prices": fallback_prices,
+        "metadata": {
+            symbol: {
+                "provider": "market_data_fallback",
+                "freshness": "fallback",
+                "timestamp": "",
+                "source_field": "latest",
+                "cache": {},
+                "fallback_reason": "Tiingo latest unavailable",
+            }
+            for symbol in fallback_prices
+        },
+        "provider_status": "fallback" if fallback_prices else "error",
+    }
 
 
 def planned_fill_event(row, latest, side, entry, timestamp):
@@ -181,13 +245,44 @@ def format_paper_fill_report(result):
     lines = [
         "# Paper Fill Check",
         "",
-        f"Mode: {'Applied' if result.get('applied') else 'Preview'}",
+        f"Mode: {format_fill_mode(result)}",
         f"Symbols Checked: {len(result.get('checked_symbols', []))}",
         f"Events: {len(result.get('events', []))}",
+        f"Applied Events: {len(result.get('applied_events', []))}",
         "",
     ]
 
+    exit_order_result = result.get("exit_order_result") or {}
+    exit_events = exit_order_result.get("events", [])
+    if exit_order_result:
+        lines.extend([
+            "## Human-Approved Exit Orders",
+            f"Events: {len(exit_events)}",
+            f"Applied: {len(exit_order_result.get('applied_events', []))}",
+            "",
+        ])
+        for event in exit_events:
+            lines.append(
+                "- {symbol} human exit: trade {trade_id}, order {order_id}, "
+                "{shares:g} shares at {fill_price} (latest {latest_price}); {reason}".format(**event)
+            )
+        if exit_events:
+            lines.append("")
+
     events = result.get("events", [])
+    metadata = result.get("price_metadata") or {}
+    fallback_symbols = [
+        symbol for symbol, item in metadata.items()
+        if item.get("freshness") and item.get("freshness") != "intraday_or_latest"
+    ]
+    if fallback_symbols:
+        lines.append(
+            "Price Source Note: fallback/cached/EOD prices used for "
+            + ", ".join(sorted(fallback_symbols))
+            + "."
+        )
+        lines.append("")
+
     if not events:
         lines.append("No paper fill conditions were hit.")
         return "\n".join(lines)
@@ -198,3 +293,13 @@ def format_paper_fill_report(result):
             "(latest {latest_price}); {reason}; trade {trade_id}".format(**event)
         )
     return "\n".join(lines)
+
+
+def format_fill_mode(result):
+    if not result.get("applied"):
+        return "Preview"
+    if not result.get("allow_entry_fills") and result.get("allow_exit_fills"):
+        return "Applied exits only; entries are alert-only"
+    if result.get("allow_entry_fills") and not result.get("allow_exit_fills"):
+        return "Applied entries only"
+    return "Applied"

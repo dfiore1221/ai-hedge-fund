@@ -110,7 +110,7 @@ def get_trading_economics_calendar(api_key, countries, start_date, end_date):
             provider="Trading Economics",
             configured=True,
             status="error",
-            error=f"Could not fetch Trading Economics calendar: {exc}",
+            error=f"Could not fetch Trading Economics calendar: {sanitize_error(exc, api_key)}",
             events=[],
             countries=countries,
             start_date=start_date.isoformat(),
@@ -172,7 +172,7 @@ def get_fred_release_calendar(api_key, start_date, end_date):
             provider="FRED Release Calendar",
             configured=True,
             status="error",
-            error=f"Could not fetch FRED release calendar: {exc}",
+            error=f"Could not fetch FRED release calendar: {sanitize_error(exc, api_key)}",
             events=[],
             countries=["united states"],
             start_date=start_date.isoformat(),
@@ -240,6 +240,15 @@ def fetch_fred_release_dates(api_key, start_date, end_date):
 
     set_cached_json("economic_calendar", cache_key, payload)
     return payload
+
+
+def sanitize_error(error, *secrets):
+    message = str(error)
+    for secret in secrets:
+        secret = str(secret or "").strip()
+        if secret:
+            message = message.replace(secret, "<redacted>")
+    return message
 
 
 def normalize_trading_economics_event(item):

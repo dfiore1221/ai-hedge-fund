@@ -40,11 +40,13 @@ def build_paper_ledger(frame=None):
 
     transactions = add_cash_balances(raw_transactions, starting_cash)
     positions = build_open_positions(journal)
+    lots = build_open_lots(journal)
     account = summarize_account(starting_cash, transactions, positions, planned_orders, journal)
 
     return {
         "account": account,
         "positions": positions,
+        "lots": lots,
         "transactions": transactions,
         "planned_orders": planned_orders,
         "warnings": build_warnings(account),
@@ -161,6 +163,36 @@ def build_open_positions(journal):
             position["average_cost"] = position["cost_basis"] / position["quantity"]
         rows.append(round_position(position))
     return sorted(rows, key=lambda item: item["symbol"])
+
+
+def build_open_lots(journal):
+    lots = []
+    for _, trade in journal.iterrows():
+        normalized = normalize_trade(trade)
+        if normalized["status"] != "open":
+            continue
+        lots.append({
+            "trade_id": normalized["id"],
+            "opened_at": normalized["opened_at"],
+            "symbol": normalized["symbol"],
+            "side": normalized["side"],
+            "quantity": round_money(normalized["shares"]),
+            "entry": round_money(normalized["entry"]),
+            "last_price": round_money(normalized["current_price"]),
+            "market_value": round_money(normalized["current_price"] * normalized["shares"]),
+            "unrealized_pnl": round_money(directional_pnl(
+                normalized["side"],
+                normalized["entry"],
+                normalized["current_price"],
+                normalized["shares"],
+            )),
+            "stop": round_money(normalized["stop"]),
+            "target": round_money(normalized["target"]),
+            "planned_risk": round_money(normalized["planned_risk"]),
+            "source": normalized["source"],
+            "agent_run_id": normalized["agent_run_id"],
+        })
+    return sorted(lots, key=lambda item: (item["symbol"], item["opened_at"], item["trade_id"]))
 
 
 def build_planned_order(trade):

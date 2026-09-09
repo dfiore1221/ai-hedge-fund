@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 
 from data.trade_journal import CLOSED_STATUS, enrich_trade_metrics, load_trade_journal
-from memory.research_memory import get_agent_reports_for_run
+from memory.research_memory import get_agent_reports_for_run, get_recent_daily_setup_reviews
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +15,7 @@ def generate_feedback_report():
     trades = enrich_trade_metrics(load_trade_journal())
     closed_trades = trades[trades["status"] == CLOSED_STATUS].copy() if not trades.empty else trades
     closed_trades = add_decision_context(closed_trades)
+    setup_reviews = get_recent_daily_setup_reviews(limit=100)
 
     return {
         "agent": "Feedback Loop",
@@ -29,6 +30,7 @@ def generate_feedback_report():
         "by_symbol": summarize_group(closed_trades, "symbol"),
         "by_decision_tier": summarize_group(closed_trades, "decision_tier"),
         "agent_scorecard": build_agent_scorecard(closed_trades),
+        "setup_review_learning": summarize_setup_reviews(setup_reviews),
         "lessons": extract_lessons(closed_trades),
         "missing_information": collect_missing_information(closed_trades),
     }
@@ -36,24 +38,42 @@ def generate_feedback_report():
 
 def add_decision_context(closed_trades):
     if closed_trades is None or closed_trades.empty:
-        return pd.DataFrame(columns=list(load_trade_journal().columns) + ["decision_tier"])
+        return pd.DataFrame(columns=list(load_trade_journal().columns) + ["decision_tier", "cio_confidence"])
 
     closed_trades = closed_trades.copy()
-    closed_trades["decision_tier"] = ""
-    closed_trades["cio_confidence"] = ""
+    closed_trades = closed_trades.drop(columns=["decision_tier", "cio_confidence"], errors="ignore")
+    decision_tiers = []
+    cio_confidences = []
 
-    for index, trade in closed_trades.iterrows():
+    for _, trade in closed_trades.iterrows():
+        decision_tier = ""
+        cio_confidence = None
         run_id = str(trade.get("agent_run_id", "")).strip()
-        if not run_id:
-            continue
-        cio = find_agent_output(run_id, "Chief Investment Officer")
-        if not cio:
-            continue
-        final_decision = cio.get("final_decision") or {}
-        closed_trades.at[index, "decision_tier"] = final_decision.get("status", "")
-        closed_trades.at[index, "cio_confidence"] = final_decision.get("confidence", "")
+        if run_id:
+            cio = find_agent_output(run_id, "Chief Investment Officer")
+            if cio:
+                final_decision = cio.get("final_decision") or {}
+                decision_tier = str(final_decision.get("status") or "")
+                cio_confidence = to_float_or_none(final_decision.get("confidence"))
+
+        decision_tiers.append(decision_tier)
+        cio_confidences.append(cio_confidence)
+
+    closed_trades = closed_trades.assign(
+        decision_tier=pd.Series(decision_tiers, index=closed_trades.index, dtype="object"),
+        cio_confidence=pd.Series(cio_confidences, index=closed_trades.index, dtype="float64"),
+    )
 
     return closed_trades
+
+
+def to_float_or_none(value):
+    if value in {"", None}:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def summarize_closed_trades(closed_trades):
@@ -132,6 +152,148 @@ def build_agent_scorecard(closed_trades):
     return sorted(scores.values(), key=lambda item: item["avg_score"], reverse=True)
 
 
+def summarize_setup_reviews(reviews):
+    if not reviews:
+        return {
+            "reviewed_setups": 0,
+            "review_dates": [],
+            "entries_triggered": 0,
+            "target_1_hits": 0,
+            "partial_win_hits": 0,
+            "stop_hits": 0,
+            "active_swings": 0,
+            "target_1_hit_rate": 0,
+            "partial_win_rate": 0,
+            "stop_first_rate": 0,
+            "avg_entered_pnl_pct": 0,
+            "avg_max_favorable_move_pct": None,
+            "avg_max_adverse_move_pct": None,
+            "learning_score": 0,
+            "read": "No setup-review memory available yet.",
+            "lessons": [
+                "Run Daily Setup Self-Review after market close to build setup-level learning memory.",
+            ],
+        }
+
+    entered = [item for item in reviews if item.get("entered")]
+    target_hits = [item for item in entered if item.get("hit_target_1")]
+    partial_hits = [item for item in entered if review_field(item, "hit_partial_win")]
+    stop_hits = [item for item in entered if item.get("hit_stop")]
+    active_swings = [
+        item for item in reviews
+        if str((item.get("output") or {}).get("swing_status", "")).lower() == "active_swing"
+    ]
+    pnl_values = [
+        float(item.get("pnl_pct"))
+        for item in entered
+        if item.get("pnl_pct") is not None
+    ]
+    outputs = [item.get("output") or {} for item in reviews]
+    mfe_values = [
+        float(item.get("max_favorable_move_pct"))
+        for item in outputs
+        if item.get("entered") and item.get("max_favorable_move_pct") is not None
+    ]
+    mae_values = [
+        float(item.get("max_adverse_move_pct"))
+        for item in outputs
+        if item.get("entered") and item.get("max_adverse_move_pct") is not None
+    ]
+
+    entered_count = len(entered)
+    target_rate = pct(len(target_hits), entered_count)
+    partial_rate = pct(len(partial_hits), entered_count)
+    stop_rate = pct(len(stop_hits), entered_count)
+    avg_pnl = average(pnl_values)
+    avg_mfe = average(mfe_values)
+    avg_mae = average(mae_values)
+    learning_score = setup_learning_score(
+        reviewed_count=len(reviews),
+        entered_count=entered_count,
+        target_rate=target_rate,
+        partial_rate=partial_rate,
+        stop_rate=stop_rate,
+        avg_pnl=avg_pnl,
+        avg_mfe=avg_mfe,
+        avg_mae=avg_mae,
+    )
+    lessons = build_setup_learning_lessons(
+        len(reviews),
+        entered_count,
+        target_rate,
+        partial_rate,
+        stop_rate,
+        avg_pnl,
+        avg_mfe,
+        avg_mae,
+    )
+
+    return {
+        "reviewed_setups": len(reviews),
+        "review_dates": sorted({item.get("review_date") for item in reviews if item.get("review_date")}, reverse=True),
+        "entries_triggered": entered_count,
+        "target_1_hits": len(target_hits),
+        "partial_win_hits": len(partial_hits),
+        "stop_hits": len(stop_hits),
+        "active_swings": len(active_swings),
+        "target_1_hit_rate": target_rate,
+        "partial_win_rate": partial_rate,
+        "stop_first_rate": stop_rate,
+        "avg_entered_pnl_pct": avg_pnl,
+        "avg_max_favorable_move_pct": avg_mfe,
+        "avg_max_adverse_move_pct": avg_mae,
+        "learning_score": learning_score,
+        "read": setup_learning_read(learning_score, entered_count),
+        "lessons": lessons,
+    }
+
+
+def setup_learning_score(reviewed_count, entered_count, target_rate, partial_rate, stop_rate, avg_pnl, avg_mfe, avg_mae):
+    if reviewed_count == 0:
+        return 0
+
+    sample_score = min(25, reviewed_count / 40 * 25)
+    target_score = min(20, target_rate * 0.20)
+    partial_score = min(15, partial_rate * 0.15)
+    stop_penalty = min(20, stop_rate * 0.20)
+    pnl_score = clamp(15 + avg_pnl, 0, 25)
+    excursion_score = 10
+    if avg_mfe is not None and avg_mae is not None:
+        excursion_score = clamp(10 + avg_mfe + avg_mae, 0, 25)
+
+    score = sample_score + target_score + partial_score + pnl_score + excursion_score - stop_penalty
+    if entered_count == 0:
+        score = min(score, 40)
+    return round(clamp(score, 0, 100), 1)
+
+
+def setup_learning_read(score, entered_count):
+    if entered_count == 0:
+        return "Setup memory exists, but no entries have triggered yet."
+    if score >= 70:
+        return "Setup-review behavior is constructive; continue tracking for sample size."
+    if score >= 45:
+        return "Setup-review behavior is mixed; keep recommendations selective."
+    return "Setup-review behavior is weak; tighten entries, target realism, or risk filters."
+
+
+def build_setup_learning_lessons(reviewed_count, entered_count, target_rate, partial_rate, stop_rate, avg_pnl, avg_mfe, avg_mae):
+    lessons = []
+    if reviewed_count < 30:
+        lessons.append("Setup-review sample is still small; use it as a process signal, not proof of edge.")
+    if entered_count > 0 and target_rate == 0:
+        lessons.append("Recent entered setups have not reached Target 1; do not loosen target assumptions.")
+    if entered_count > 0 and partial_rate > target_rate:
+        lessons.append("Partial-win rate is better than Target 1 rate; favor staged exits, nearer first targets, or trailing rules over all-or-nothing targets.")
+    if stop_rate >= 25:
+        lessons.append("Stop-first rate is elevated; review entry quality and stop distance before repeating similar setups.")
+    if entered_count > 0 and avg_pnl < 0:
+        lessons.append("Entered setups are negative on average by review close; require stronger confirmation before immediate entries.")
+    if avg_mfe is not None and avg_mae is not None and abs(avg_mae) > max(1, avg_mfe):
+        lessons.append("Average adverse movement is larger than favorable movement; the market has been punishing weak entries.")
+    return lessons or ["No major setup-review warning detected; continue collecting outcomes."]
+
+
 def score_agent_call(agent_name, output, trade):
     if not output:
         return None, ""
@@ -171,6 +333,12 @@ def score_agent_call(agent_name, output, trade):
         return score_macro_regime(regime, side, outcome), f"regime={regime}"
 
     return None, ""
+
+
+def review_field(review, key):
+    if key in review:
+        return review.get(key)
+    return (review.get("output") or {}).get(key)
 
 
 def score_directional_stance(stance, side, outcome):
@@ -336,6 +504,9 @@ def format_feedback_report(report):
     lines.extend(["", "## Agent Scorecard"])
     lines.extend(format_agent_table(report["agent_scorecard"]))
 
+    lines.extend(["", "## Daily Setup Review Learning"])
+    lines.extend(format_setup_learning(report["setup_review_learning"]))
+
     lines.extend(["", "## Recent Lessons"])
     if report["lessons"]:
         for lesson in report["lessons"]:
@@ -390,6 +561,24 @@ def format_agent_table(rows):
     return lines
 
 
+def format_setup_learning(summary):
+    return [
+        f"- Reviewed Setups: {summary['reviewed_setups']}",
+        f"- Entries Triggered: {summary['entries_triggered']}",
+        f"- Target 1 Hit Rate: {summary['target_1_hit_rate']:.1f}%",
+        f"- Partial-Win Rate: {summary['partial_win_rate']:.1f}%",
+        f"- Stop-First Rate: {summary['stop_first_rate']:.1f}%",
+        f"- Average Entered P&L: {summary['avg_entered_pnl_pct']:.2f}%",
+        f"- Average Max Favorable Move: {format_optional_pct(summary['avg_max_favorable_move_pct'])}",
+        f"- Average Max Adverse Move: {format_optional_pct(summary['avg_max_adverse_move_pct'])}",
+        f"- Committee Learning Score: {summary['learning_score']}/100",
+        f"- Read: {summary['read']}",
+        "",
+        "### Setup-Level Lessons",
+        *[f"- {lesson}" for lesson in summary["lessons"]],
+    ]
+
+
 def save_feedback_report(report):
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     path = REPORTS_DIR / "decision_feedback_report.md"
@@ -411,3 +600,18 @@ def empty_summary():
 
 def pct(value, total):
     return (value / total * 100) if total else 0
+
+
+def average(values):
+    clean = [float(value) for value in values if value is not None]
+    return round(sum(clean) / len(clean), 2) if clean else 0
+
+
+def clamp(value, lower, upper):
+    return max(lower, min(upper, value))
+
+
+def format_optional_pct(value):
+    if value is None:
+        return "n/a"
+    return f"{value:.2f}%"

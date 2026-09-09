@@ -15,7 +15,7 @@ CORE_REBALANCE_MIN_NOTIONAL = 100
 def analyze_core_etf_sleeve(macro_report, journal=None, ledger=None):
     policy = load_policy()
     regime = macro_report.get("assessment", {}).get("market_regime", "Neutral")
-    profile = policy.get("risk_profiles", {}).get(regime) or policy["risk_profiles"]["Neutral"]
+    profile = select_risk_profile(policy, regime)
     ledger = ledger or build_paper_ledger(journal)
     journal = journal if journal is not None else load_trade_journal()
     account = ledger["account"]
@@ -58,6 +58,24 @@ def analyze_core_etf_sleeve(macro_report, journal=None, ledger=None):
 
 def load_policy():
     return json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+
+
+def select_risk_profile(policy, regime):
+    profiles = policy.get("risk_profiles", {})
+    normalized = normalize_regime(regime)
+    return profiles.get(normalized) or profiles.get("Neutral") or {
+        "target_sleeve_pct": policy.get("target_sleeve_pct", 0.5),
+        "weights": {},
+    }
+
+
+def normalize_regime(regime):
+    label = str(regime or "Neutral").strip().lower().replace("_", "-")
+    if label in {"risk-on", "risk on", "riskon"}:
+        return "Risk-On"
+    if label in {"risk-off", "risk off", "riskoff"}:
+        return "Risk-Off"
+    return "Neutral"
 
 
 def current_core_holdings(journal):

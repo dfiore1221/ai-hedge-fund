@@ -14,7 +14,7 @@ from data.local_cache import get_cached_json, get_stale_cached_json, set_cached_
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = PROJECT_ROOT / ".env"
 BENZINGA_BASE_URL = "https://api.benzinga.com/api"
-DEFAULT_TIMEOUT = 8
+DEFAULT_TIMEOUT = 3
 NEWS_TTL_SECONDS = ttl_seconds(minutes=10)
 RATINGS_TTL_SECONDS = ttl_seconds(hours=6)
 STALE_FALLBACK_SECONDS = ttl_seconds(days=1)

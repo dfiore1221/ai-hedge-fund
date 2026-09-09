@@ -348,6 +348,49 @@ def get_agent_reports_for_run(run_id):
     return reports
 
 
+def get_recent_agent_reports(agent_name=None, symbol=None, limit=5):
+    init_db()
+
+    clauses = []
+    params = []
+    if agent_name:
+        clauses.append("agent_name = ?")
+        params.append(agent_name)
+    if symbol:
+        clauses.append("symbol = ?")
+        params.append(symbol.upper())
+
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(limit)
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(f"""
+        SELECT run_id, agent_name, symbol, created_at, stance, confidence, output_json
+        FROM agent_reports
+        {where}
+        ORDER BY id DESC
+        LIMIT ?
+    """, params)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    reports = []
+    for run_id, agent_name, symbol, created_at, stance, confidence, output_json in rows:
+        reports.append({
+            "run_id": run_id,
+            "agent_name": agent_name,
+            "symbol": symbol,
+            "created_at": created_at,
+            "stance": stance,
+            "confidence": confidence,
+            "output": json.loads(output_json),
+        })
+
+    return reports
+
+
 def save_daily_setup_review(report):
     init_db()
 
@@ -462,6 +505,7 @@ def get_recent_daily_setup_reviews(limit=100):
             pnl_pct,
             output_json,
         ) = row
+        output = json.loads(output_json)
         reviews.append({
             "review_date": review_date,
             "symbol": symbol,
@@ -473,10 +517,12 @@ def get_recent_daily_setup_reviews(limit=100):
             "day_close": day_close,
             "entered": bool(entered),
             "hit_target_1": bool(hit_target_1),
+            "hit_partial_win": bool(output.get("hit_partial_win")),
+            "partial_win_level": output.get("partial_win_level"),
             "hit_stop": bool(hit_stop),
             "result": result,
             "pnl_pct": pnl_pct,
-            "output": json.loads(output_json),
+            "output": output,
         })
 
     return reviews

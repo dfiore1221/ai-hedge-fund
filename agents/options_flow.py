@@ -74,7 +74,7 @@ def analyze_options_flow(ticker, max_expirations=MAX_EXPIRATIONS):
             "do not treat as execution-grade options flow."
         ),
         "missing_information": [
-            "No paid OPRA/ORATS/Tradier options feed connected.",
+            "No paid Intrinio/Tradier/ORATS options feed connected.",
             "No historical options-chain backtest or intraday flow tape connected.",
             "No execution-quality bid/ask validation beyond starter spread checks.",
         ],
@@ -304,7 +304,7 @@ def build_error(ticker, error):
         "error": error,
         "missing_information": [
             "Options chain unavailable from the free starter feed.",
-            "No paid OPRA/ORATS/Tradier options feed connected.",
+            "No paid Intrinio/Tradier/ORATS options feed connected.",
         ],
     }
 
