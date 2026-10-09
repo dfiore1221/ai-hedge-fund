@@ -33,7 +33,7 @@ services:
       - --server.address=0.0.0.0
       - --server.port=8501
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"
     volumes:
       - ../portfolio:/app/portfolio
       - ../memory:/app/memory
