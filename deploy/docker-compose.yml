@@ -1,0 +1,41 @@
+services:
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      AIFUNDOS_WATCHDOG_INTERVAL_SECONDS: "900"
+      TZ: America/New_York
+    restart: unless-stopped
+    volumes:
+      - ../portfolio:/app/portfolio
+      - ../memory:/app/memory
+      - ../reports:/app/reports
+      - ../data_cache:/app/data_cache
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      TZ: America/New_York
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - streamlit
+      - run
+      - dashboard/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+    ports:
+      - "8501:8501"
+    volumes:
+      - ../portfolio:/app/portfolio
+      - ../memory:/app/memory
+      - ../reports:/app/reports
+      - ../data_cache:/app/data_cache

@@ -6,7 +6,6 @@ from datetime import datetime
 from data.paper_fills import fetch_price_snapshot
 from data.paper_ledger import build_paper_ledger
 from data.trade_journal import (
-    OPEN_STATUSES,
     enrich_trade_metrics,
     load_trade_journal,
     normalize_status,
@@ -39,7 +38,7 @@ def build_portfolio_ticker_status(refresh_prices=True, save_prices=True):
             journal["current_price"] = journal["current_price"].astype("object")
             for index, row in journal.iterrows():
                 symbol = str(row.get("symbol", "")).upper().strip()
-                if normalize_status(row.get("status")) not in OPEN_STATUSES:
+                if normalize_status(row.get("status")) != "open":
                     continue
                 if symbol in prices:
                     journal.at[index, "current_price"] = round(float(prices[symbol]), 4)
@@ -88,7 +87,7 @@ def open_symbols(journal):
         return symbols
 
     for _, row in journal.iterrows():
-        if normalize_status(row.get("status")) not in OPEN_STATUSES:
+        if normalize_status(row.get("status")) != "open":
             continue
         symbol = str(row.get("symbol", "")).upper().strip()
         shares = to_float(row.get("shares"))

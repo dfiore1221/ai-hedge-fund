@@ -8,6 +8,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OPTIONS_JOURNAL_PATH = PROJECT_ROOT / "portfolio" / "options_journal.csv"
 OPTIONS_OPEN_STATUSES = {"planned", "open"}
+OPTIONS_POSITION_STATUSES = {"open"}
 OPTIONS_CLOSED_STATUS = "closed"
 CONTRACT_MULTIPLIER = 100
 
@@ -21,12 +22,14 @@ OPTIONS_COLUMNS = [
     "source",
     "agent_run_id",
     "option_type",
+    "contract_symbol",
     "expiration",
     "strike",
     "short_strike",
     "contracts",
     "multiplier",
     "entry_premium",
+    "filled_at",
     "current_premium",
     "exit_premium",
     "target_premium",
@@ -44,6 +47,15 @@ OPTIONS_COLUMNS = [
     "exit_reason",
     "lessons",
     "notes",
+    "quote_provider",
+    "quote_timestamp",
+    "underlying_entry_trigger",
+    "underlying_trigger_direction",
+    "underlying_price",
+    "bid_ask_spread_pct",
+    "volume",
+    "open_interest",
+    "implied_volatility",
 ]
 
 
@@ -145,10 +157,10 @@ def enrich_options_metrics(frame):
         frame.at[index, "max_profit"] = round_number(max_profit)
         frame.at[index, "break_even"] = round_number(break_even)
 
-        if status in OPTIONS_OPEN_STATUSES and current and entry and contracts:
+        if status in OPTIONS_POSITION_STATUSES and current and entry and contracts:
             unrealized = (current - entry) * contracts * multiplier
             frame.at[index, "unrealized_pnl"] = round_number(unrealized)
-        elif status not in OPTIONS_OPEN_STATUSES:
+        else:
             frame.at[index, "unrealized_pnl"] = ""
 
         if status == OPTIONS_CLOSED_STATUS and exit_premium and entry and contracts:
@@ -169,7 +181,8 @@ def summarize_options_journal(frame=None):
         return empty_summary()
 
     statuses = frame["status"].map(normalize_status)
-    open_frame = frame[statuses.isin(OPTIONS_OPEN_STATUSES)]
+    open_frame = frame[statuses.isin(OPTIONS_POSITION_STATUSES)]
+    planned_frame = frame[statuses == "planned"]
     closed_frame = frame[statuses == OPTIONS_CLOSED_STATUS]
     today_closed = filter_closed_since(closed_frame, date.today())
     week_closed = filter_closed_since(closed_frame, start_of_week(date.today()))
@@ -177,7 +190,9 @@ def summarize_options_journal(frame=None):
     graded = len(closed_frame[closed_frame["outcome"].isin(["win", "loss", "breakeven"])])
 
     return {
-        "planned_or_open": len(open_frame),
+        "planned_or_open": len(open_frame) + len(planned_frame),
+        "open": len(open_frame),
+        "planned": len(planned_frame),
         "closed": len(closed_frame),
         "open_premium_at_risk": numeric_sum(open_frame, "max_loss"),
         "open_unrealized_pnl": numeric_sum(open_frame, "unrealized_pnl"),

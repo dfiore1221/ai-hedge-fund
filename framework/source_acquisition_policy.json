@@ -1,0 +1,48 @@
+{
+  "version": "1.0",
+  "purpose": "Define what each premium source must add before AIFundOS treats it as decision-grade evidence.",
+  "options": {
+    "current": "Yahoo/yfinance delayed chain snapshot with contract-level paper gates",
+    "status": "starter_paper_only",
+    "minimum_upgrade_fields": [
+      "timestamped bid and ask",
+      "volume and open interest",
+      "implied volatility and greeks",
+      "historical option prices",
+      "corporate-action-safe contract identifiers"
+    ],
+    "candidate_providers": ["Intrinio", "Tradier", "Polygon", "ORATS", "Databento/OPRA"],
+    "activation_test": "Run a measured bakeoff on SPY, QQQ, AMD, NVDA, and MSFT before changing the data-quality score."
+  },
+  "institutional_crowding": {
+    "current": "Quiver off-exchange starter context plus public SEC ownership filings",
+    "status": "partial_and_lagged",
+    "minimum_upgrade_fields": [
+      "short interest and utilization",
+      "borrow cost where licensed",
+      "13F ownership changes with filing-lag labels",
+      "ETF ownership and flows",
+      "fund concentration or crowding percentile"
+    ],
+    "candidate_providers": ["Quiver Trader", "S3 Partners", "Ortex", "FactSet", "Bloomberg"],
+    "activation_test": "Measure whether the source changes or improves at least 20 paper decisions before relying on it."
+  },
+  "research_notes": {
+    "current": "Benzinga analyst actions and public company/SEC material; no full broker-note text",
+    "status": "licensed_text_missing",
+    "minimum_upgrade_fields": [
+      "firm and analyst",
+      "publication timestamp",
+      "rating and price-target change",
+      "earnings-estimate revisions",
+      "licensed thesis text with citation and entitlement metadata"
+    ],
+    "candidate_sources": ["licensed broker portal", "FactSet", "Bloomberg", "LSEG/Refinitiv", "user-supplied entitled PDFs"],
+    "activation_test": "Store provenance and entitlement metadata; never scrape or infer paywalled note text."
+  },
+  "human_boundaries": [
+    "AIFundOS may identify and compare providers but may not buy a subscription or accept commercial terms.",
+    "API keys and licensed documents must be supplied by the human operator.",
+    "Missing premium data lowers confidence or blocks a strategy; it is never fabricated."
+  ]
+}

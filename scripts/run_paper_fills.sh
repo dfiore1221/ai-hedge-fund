@@ -1,7 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
 
-PROJECT_ROOT="/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund"
+SCRIPT_DIR=${0:a:h}
+PROJECT_ROOT=${SCRIPT_DIR:h}
 PYTHON="$PROJECT_ROOT/.venv/bin/python"
 
 cd "$PROJECT_ROOT"

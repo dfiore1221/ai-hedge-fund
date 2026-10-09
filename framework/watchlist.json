@@ -4,7 +4,7 @@
   "notes": [
     "symbol is the Yahoo Finance scan ticker.",
     "display_symbol preserves the operator-facing ticker or company shorthand where it differs.",
-    "The morning brief is watch-only unless Risk and CIO approve a paper-trade candidate.",
+    "The morning brief falls back to watch-only unless Risk, CIO, data quality, and the autonomous paper mandate authorize a simulated candidate.",
     "Market-map ETFs are included so the Committee compares AI/growth ideas against broad market, sector, defensive, and cyclical alternatives."
   ],
   "symbols": [

@@ -8,13 +8,9 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/zsh</string>
-    <string>-lc</string>
-    <string>cd "/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund" &amp;&amp; mkdir -p reports/morning_brief &amp;&amp; .venv/bin/python main.py morning-email today &gt;&gt; reports/morning_brief/automation.log 2&gt;&amp;1</string>
+    <string>/Users/davidfiore/Applications/AIFundOS Scheduler.app/Contents/MacOS/aifundos-scheduler</string>
+    <string>/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund/scripts/run_morning_email.sh</string>
   </array>
-
-  <key>WorkingDirectory</key>
-  <string>/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund</string>
 
   <key>StartCalendarInterval</key>
   <dict>
@@ -25,10 +21,10 @@
   </dict>
 
   <key>StandardOutPath</key>
-  <string>/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund/reports/morning_brief/launchd.out.log</string>
+  <string>/Users/davidfiore/Library/Logs/AIFundOS/morning-brief.out.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund/reports/morning_brief/launchd.err.log</string>
+  <string>/Users/davidfiore/Library/Logs/AIFundOS/morning-brief.err.log</string>
 
   <key>RunAtLoad</key>
   <false/>

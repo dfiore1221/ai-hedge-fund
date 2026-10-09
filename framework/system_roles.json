@@ -10,6 +10,7 @@
   "shared_data_layers": [
     "Data Quality Gate",
     "Market Intelligence",
+    "Intraday Market Surveillance",
     "Macro Event Interpretation",
     "News Intelligence",
     "Options Flow Evidence",
@@ -18,8 +19,10 @@
     "Economic Calendar"
   ],
   "governance_layers": [
-    "Watch-only mode",
-    "Human paper-trade approval",
+    "Watch-only fallback when autonomous gates fail",
+    "Human paper-trade approval for manual overrides",
+    "Autonomous paper mandate within hard risk limits",
+    "Human escalation monitor for restricted changes",
     "Risk veto",
     "Data quality gate",
     "Market-hours execution realism",
@@ -41,8 +44,14 @@
     "Core ETF rebalance approval",
     "Position manager",
     "Intraday monitor",
+    "Intraday opportunity engine",
+    "Five-minute paper execution lane",
     "Email delivery and retry",
-    "Desktop portfolio ticker"
+    "Desktop portfolio ticker",
+    "Autonomous paper planner and execution loop",
+    "Benchmark attribution",
+    "Restricted-change notification and approval workflow"
   ],
+  "autonomy_boundary": "The Committee may autonomously plan, enter, manage, exit, review, and learn from simulated positions. It may not place live orders, connect live-money authority, expose credentials, or weaken immutable risk limits.",
   "rule": "If it makes or challenges a decision, it can be a Committee agent. If it supplies facts, context, signals, or calculations, it is a shared data layer. If it enforces discipline, limits, approvals, or safety, it is governance. If it records outcomes or improves future judgment, it is memory. If it tracks, executes, displays, or notifies, it is a tool or workflow."
 }

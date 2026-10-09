@@ -36,19 +36,38 @@ def run_automation_watchdog(now=None):
     if 445 <= hhmm <= 1130 and not has_today_file("reports/morning_brief", f"morning_brief_{now:%Y%m%d}_*.json"):
         report["actions"].append(run_command("morning-email", ["morning-email", "today"], timeout=1800))
 
+    if (
+        445 <= hhmm <= 1130
+        and has_today_file("reports/morning_brief", f"morning_brief_{now:%Y%m%d}_*.json")
+        and not has_today_autonomy_action(now, "plan")
+    ):
+        report["actions"].append(run_command("autonomy-plan", ["autonomy", "plan"], timeout=300))
+
     if 450 <= hhmm <= 1200:
-        report["actions"].append(run_command("email-retry", ["email-retry", "morning"], timeout=300))
+        report["actions"].append(run_command("email-retry", ["email-retry", "all"], timeout=300))
 
     if 930 <= hhmm <= 1605:
-        report["actions"].append(run_command("intraday-monitor", ["intraday-monitor", "now"], timeout=900))
+        report["actions"].append(run_command("intraday-discovery", ["intraday-discovery", "now"], timeout=600))
+        report["actions"].append(run_command("autonomy-plan-intraday", ["autonomy", "plan"], timeout=300))
+        report["actions"].append(run_command("autonomy-execute", ["autonomy", "execute"], timeout=300))
+        report["actions"].append(run_command("intraday-monitor", ["intraday-monitor", "now"], timeout=300))
+        report["actions"].append(run_command("trade-funnel", ["funnel", "status"], timeout=60))
 
     if hhmm >= 1510 and not has_today_file("reports/setup_review", f"setup_review_{now:%Y%m%d}.json"):
         report["actions"].append(run_command("daily-setup-review", ["review", "today"], timeout=1200))
+        report["actions"].append(run_command("trade-funnel-eod", ["funnel", "status"], timeout=60))
 
     if now.isoweekday() == 5 and hhmm >= 1615 and not has_today_file("reports/weekly_review", f"weekly_review_*_{now:%Y%m%d}.json"):
         report["actions"].append(run_command("weekly-review", ["weekly-review", "today"], timeout=1200))
 
-    failures = [action for action in report["actions"] if action.get("returncode") not in {0, None}]
+    if 500 <= hhmm <= 1800:
+        report["actions"].append(run_command("human-escalations", ["human-escalations", "notify"], timeout=300))
+
+    failures = [
+        action for action in report["actions"]
+        if action.get("returncode") not in {0, None}
+        or action.get("operational_status") == "needs_attention"
+    ]
     if failures:
         report["status"] = "needs_attention"
         report["notes"].append("One or more automation tasks failed; check action details and logs.")
@@ -65,6 +84,20 @@ def has_today_file(relative_dir, pattern):
     return directory.exists() and any(directory.glob(pattern))
 
 
+def has_today_autonomy_action(now, action):
+    directory = PROJECT_ROOT / "reports" / "autonomy"
+    if not directory.exists():
+        return False
+    for path in directory.glob(f"autonomy_{now:%Y%m%d}_*.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if payload.get("action") == action:
+            return True
+    return False
+
+
 def run_command(label, args, timeout):
     started_at = datetime.now()
     command = [str(PYTHON), "main.py", *args]
@@ -76,7 +109,7 @@ def run_command(label, args, timeout):
             text=True,
             timeout=timeout,
         )
-        return {
+        result = {
             "label": label,
             "command": " ".join(["python", "main.py", *args]),
             "started_at": started_at.isoformat(timespec="seconds"),
@@ -85,6 +118,8 @@ def run_command(label, args, timeout):
             "stdout_tail": tail_text(completed.stdout),
             "stderr_tail": tail_text(completed.stderr),
         }
+        result["operational_status"] = classify_operational_status(label, completed.stdout, completed.stderr)
+        return result
     except subprocess.TimeoutExpired as exc:
         return {
             "label": label,
@@ -104,6 +139,21 @@ def tail_text(value, limit=1200):
         value = value.decode("utf-8", errors="replace")
     value = str(value).strip()
     return value[-limit:]
+
+
+def classify_operational_status(label, stdout, stderr):
+    text = f"{stdout or ''}\n{stderr or ''}".lower()
+    if label in {"morning-email", "email-retry", "intraday-discovery", "intraday-monitor", "human-escalations", "autonomy-plan-intraday"} and any(marker in text for marker in [
+        "queued for retry",
+        "status: queued",
+        "retry_failed",
+        "smtpauthenticationerror",
+        "username and password not accepted",
+        "could not resolve host",
+        "nodename nor servname provided",
+    ]):
+        return "needs_attention"
+    return "ok"
 
 
 def format_automation_watchdog_report(report):
@@ -126,6 +176,8 @@ def format_automation_watchdog_report(report):
             )
             if action.get("stderr_tail"):
                 lines.append(f"  stderr: {action['stderr_tail']}")
+            if action.get("operational_status") == "needs_attention":
+                lines.append("  operational status: needs attention")
 
     lines.extend(["", "## Notes"])
     lines.extend([f"- {note}" for note in report.get("notes", [])] or ["- None."])

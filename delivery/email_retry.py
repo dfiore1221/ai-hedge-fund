@@ -11,8 +11,21 @@ QUEUE_DIR = PROJECT_ROOT / "reports" / "email_queue"
 DEFAULT_EXPIRY_HOURS = 8
 
 
-def queue_email(subject, body, attachment_path=None, kind="general", error=None, expiry_hours=DEFAULT_EXPIRY_HOURS):
+def queue_email(
+    subject,
+    body,
+    attachment_path=None,
+    kind="general",
+    error=None,
+    expiry_hours=DEFAULT_EXPIRY_HOURS,
+    dedupe_key=None,
+    metadata=None,
+):
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    if dedupe_key:
+        existing = find_pending_email(kind, dedupe_key)
+        if existing:
+            return existing
     created_at = datetime.now()
     payload = {
         "id": build_email_id(kind, subject, created_at),
@@ -26,6 +39,8 @@ def queue_email(subject, body, attachment_path=None, kind="general", error=None,
         "subject": subject,
         "body": body,
         "attachment_path": str(attachment_path) if attachment_path else None,
+        "dedupe_key": str(dedupe_key or ""),
+        "metadata": metadata or {},
     }
     path = QUEUE_DIR / f"{payload['id']}.json"
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -46,6 +61,7 @@ def retry_pending_emails(kind=None, max_attempts=12):
             payload["status"] = "expired"
             payload["last_error"] = "Pending email expired before it could be sent."
             save_payload(path, payload)
+            finalize_notification_state(payload, "expired")
             results.append(build_result(path, payload, "expired"))
             continue
 
@@ -53,6 +69,7 @@ def retry_pending_emails(kind=None, max_attempts=12):
             payload["status"] = "failed"
             payload["last_error"] = "Maximum retry attempts reached."
             save_payload(path, payload)
+            finalize_notification_state(payload, "failed")
             results.append(build_result(path, payload, "failed"))
             continue
 
@@ -74,6 +91,7 @@ def retry_pending_emails(kind=None, max_attempts=12):
         payload["last_error"] = ""
         payload["delivery"] = delivery
         save_payload(path, payload)
+        finalize_notification_state(payload, "sent")
         results.append(build_result(path, payload, "sent"))
 
     return {
@@ -110,6 +128,37 @@ def pending_email_paths():
     if not QUEUE_DIR.exists():
         return []
     return sorted(QUEUE_DIR.glob("*.json"))
+
+
+def find_pending_email(kind, dedupe_key):
+    for path in pending_email_paths():
+        payload = load_payload(path)
+        if not payload or payload.get("status") != "pending":
+            continue
+        if payload.get("kind") == kind and payload.get("dedupe_key") == str(dedupe_key):
+            return path
+    return None
+
+
+def finalize_notification_state(payload, status):
+    metadata = payload.get("metadata") or {}
+    state_path = metadata.get("alert_state_path")
+    alert_ids = {str(item) for item in metadata.get("alert_ids", []) if item}
+    if not state_path or not alert_ids:
+        return
+    path = Path(state_path)
+    try:
+        state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        state = {}
+    queued = set(state.get("queued_alert_ids", [])) - alert_ids
+    sent = set(state.get("sent_alert_ids", []))
+    if status == "sent":
+        sent.update(alert_ids)
+    state["queued_alert_ids"] = sorted(queued)[-500:]
+    state["sent_alert_ids"] = sorted(sent)[-500:]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
 def pending_count(kind=None):

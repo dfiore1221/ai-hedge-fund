@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.dfiore.ai-hedge-fund.execution-lane</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/davidfiore/Applications/AIFundOS Scheduler.app/Contents/MacOS/aifundos-scheduler</string>
+    <string>/Users/davidfiore/Documents/Hedge Fund/current-ai-hedge-fund/scripts/run_paper_fills.sh</string>
+  </array>
+
+  <key>StartInterval</key>
+  <integer>300</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/davidfiore/Library/Logs/AIFundOS/execution-lane.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/davidfiore/Library/Logs/AIFundOS/execution-lane.err.log</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>

@@ -33,8 +33,8 @@ def generate_daily_setup_review(review_day=None, source_path=None, top_n=None, s
         "layer": "Daily Setup Self-Review",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "review_date": review_date.isoformat(),
-        "review_mode": "swing_trade_day_check",
-        "intended_horizon": "multi-day swing trade",
+        "review_mode": "strategy_specific_day_check",
+        "intended_horizon": "mixed; each setup carries its own strategy horizon",
         "source_morning_brief_path": str(source),
         "source_morning_brief_created_at": morning.get("created_at"),
         "top_n": len(ideas),
@@ -162,6 +162,9 @@ def review_setup_idea(idea, review_date):
         "decision": idea.get("decision"),
         "score": idea.get("score"),
         "category": idea.get("category"),
+        "strategy_family": (idea.get("strategy_plan") or {}).get("selected_family") or "legacy_swing",
+        "holding_horizon": (idea.get("strategy_plan") or {}).get("holding_horizon") or "multi-day swing trade",
+        "vehicle": (idea.get("strategy_plan") or {}).get("vehicle") or "equity",
         "side": side,
         "entry": entry,
         "stop": stop,
@@ -408,7 +411,7 @@ def build_self_review_lessons(reviews):
         return ["No setups were available for review."]
     if summary["target_1_hits"] == 0 and summary["entries_triggered"] > 0:
         lessons.append(
-            "No entered setup reached Target 1 today. This is not a failure by itself because the intended horizon is multi-day swing trading."
+            "No entered setup reached Target 1 today. Judge each setup against its recorded strategy horizon before treating that as a failure."
         )
     if summary.get("partial_win_hits", 0) > 0:
         lessons.append(
@@ -416,7 +419,7 @@ def build_self_review_lessons(reviews):
         )
     if summary["active_swings"] > 0:
         lessons.append(
-            f"{summary['active_swings']} setup(s) remain active swings; track them across the week before judging target/stop quality."
+            f"{summary['active_swings']} setup(s) remain active; track them through their stated horizon before judging target/stop quality."
         )
     if summary["no_entries"] >= summary["setups_reviewed"] / 2:
         lessons.append(

@@ -24,6 +24,8 @@ reports/alternative_data/
 reports/feedback/
 reports/committee_questions/
 reports/automation_watchdog/
+reports/autonomy/
+reports/human_escalation/
 reports/paper_lab/
 reports/paper_fills/
 reports/setup_review/
@@ -31,6 +33,9 @@ reports/weekly_review/
 reports/position_manager/
 reports/portfolio_governor/
 reports/intraday_monitor/
+reports/intraday_discovery/
+reports/strategy_review/
+reports/trade_funnel/
 reports/email_queue/
 reports/*.log
 data_cache/

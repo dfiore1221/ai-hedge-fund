@@ -4,6 +4,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from agents.core_etf_sleeve import normalize_regime, select_risk_profile
+from agents.benchmark_attribution import generate_benchmark_attribution
 from agents.market_intelligence import generate_daily_market_intelligence
 from data.paper_ledger import build_paper_ledger
 from data.trade_journal import (
@@ -30,6 +31,7 @@ def generate_portfolio_governor_report(
     save_memory=True,
     refresh_market_data=True,
     persist_prices=True,
+    refresh_benchmarks=True,
 ):
     created_at = datetime.now().isoformat(timespec="seconds")
     run_id = f"{created_at[:10]}-portfolio-governor"
@@ -47,6 +49,10 @@ def generate_portfolio_governor_report(
     positions = enrich_positions(ledger.get("positions", []), metadata, policy, equity)
     exposure = build_exposure_map(positions, equity)
     attribution = build_attribution(journal, positions, equity)
+    benchmark_attribution = (
+        generate_benchmark_attribution(ledger=ledger, journal=journal)
+        if refresh_benchmarks else {}
+    )
     costs = build_cost_model(journal, positions, policy)
     controls = evaluate_controls(account, exposure, positions, policy)
     core_rules = evaluate_core_rebalance_rules(positions, account, core_policy, policy, core_regime)
@@ -68,6 +74,7 @@ def generate_portfolio_governor_report(
         "core_rebalance_rules": core_rules,
         "risk_controls": controls,
         "attribution": attribution,
+        "benchmark_attribution": benchmark_attribution,
         "cost_model": costs,
         "action_plan": action_plan,
         "positions": positions,
@@ -627,6 +634,7 @@ def format_portfolio_governor_report(report):
     core_rules = report["core_rebalance_rules"]
     controls = report["risk_controls"]
     attribution = report["attribution"]
+    benchmark = report.get("benchmark_attribution") or {}
     costs = report["cost_model"]
 
     lines = [
@@ -672,6 +680,8 @@ def format_portfolio_governor_report(report):
     lines.append(f"- Realized P&L: {money(attribution.get('realized_pnl'))}")
     lines.append(f"- Unrealized P&L: {money(attribution.get('unrealized_pnl'))}")
     lines.append(f"- Total P&L: {money(attribution.get('total_pnl'))} ({format_pct(attribution.get('total_return_pct'))})")
+    lines.extend(["", "### Benchmark Attribution"])
+    lines.extend(format_benchmark_attribution(benchmark))
     lines.extend(["", "### Top Contributors"])
     lines.extend(format_attribution_rows(attribution.get("top_contributors", [])))
     lines.extend(["", "### Top Detractors"])
@@ -708,6 +718,33 @@ def format_attribution_rows(rows):
         f"unrealized {money(row.get('unrealized_pnl'))}; trades {row.get('trades')}"
         for row in rows
     ]
+
+
+def format_benchmark_attribution(benchmark):
+    if not benchmark:
+        return ["- Benchmark data unavailable."]
+    period = benchmark.get("since_inception") or {}
+    primary = period.get("primary") or {}
+    lines = [
+        f"- AIFundOS since inception: {format_number(benchmark.get('portfolio_return_pct'))}%",
+        f"- {primary.get('name', primary.get('symbol', 'Primary benchmark'))}: "
+        f"{format_optional_pct(primary.get('return_pct'))}; active return "
+        f"{format_optional_pct(primary.get('active_return_pct'))}",
+    ]
+    for row in period.get("comparisons", []):
+        lines.append(
+            f"- {row.get('name')}: {format_optional_pct(row.get('return_pct'))}; "
+            f"active return {format_optional_pct(row.get('active_return_pct'))}"
+        )
+    lines.append(
+        f"- Measurement window: {period.get('start_date', benchmark.get('portfolio_inception'))} "
+        f"to {period.get('end_date', benchmark.get('as_of'))}"
+    )
+    return lines
+
+
+def format_optional_pct(value):
+    return "n/a" if value is None else f"{float(value):.2f}%"
 
 
 def save_portfolio_governor_report(report):

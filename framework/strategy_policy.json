@@ -1,0 +1,89 @@
+{
+  "version": "1.0",
+  "mode": "strategy_first_autonomous_paper",
+  "description": "The Committee selects a strategy family, holding horizon, and defined-loss vehicle before AIFundOS creates a simulated order.",
+  "families": {
+    "scalp": {
+      "enabled": false,
+      "vehicle": "equity",
+      "holding_horizon": "minutes",
+      "risk_per_trade_pct": 0.0005,
+      "target_r": 0.5,
+      "requires": ["execution_grade_intraday_quotes", "one_minute_monitor", "spread_and_slippage_model"],
+      "blocked_reason": "The current monitor and price feeds are not execution-grade for scalping."
+    },
+    "day": {
+      "enabled": false,
+      "vehicle": "equity",
+      "holding_horizon": "same_session",
+      "risk_per_trade_pct": 0.00075,
+      "target_r": 0.75,
+      "requires": ["execution_grade_intraday_bars", "five_minute_or_faster_monitor", "forced_close_rule"],
+      "blocked_reason": "The current scheduler cannot reliably supervise same-day entries and exits."
+    },
+    "swing": {
+      "enabled": true,
+      "vehicle": "equity",
+      "holding_horizon": "2_to_10_trading_days",
+      "risk_per_trade_pct": 0.001,
+      "target_r": 0.75,
+      "requires": ["daily_bars", "valid_entry_stop_target", "risk_manager_approval"]
+    },
+    "position": {
+      "enabled": true,
+      "vehicle": "equity",
+      "holding_horizon": "20_to_90_trading_days",
+      "risk_per_trade_pct": 0.0015,
+      "target_r": 1.25,
+      "requires": ["daily_bars", "fundamental_thesis", "valid_entry_stop_target", "risk_manager_approval"]
+    },
+    "long_call": {
+      "enabled": true,
+      "vehicle": "option",
+      "holding_horizon": "21_to_90_days_to_expiration",
+      "risk_per_trade_pct": 0.0025,
+      "profit_take_pct": 50,
+      "stop_loss_pct": 50,
+      "requires": ["bullish_stock_setup", "strict_contract_liquidity", "defined_premium_loss", "event_check"]
+    },
+    "long_put": {
+      "enabled": true,
+      "vehicle": "option",
+      "holding_horizon": "21_to_90_days_to_expiration",
+      "risk_per_trade_pct": 0.0025,
+      "profit_take_pct": 50,
+      "stop_loss_pct": 50,
+      "requires": ["bearish_stock_setup", "strict_contract_liquidity", "defined_premium_loss", "event_check"]
+    },
+    "call_debit_spread": {
+      "enabled": false,
+      "vehicle": "option_spread",
+      "holding_horizon": "21_to_90_days_to_expiration",
+      "blocked_reason": "Multi-leg quote synchronization and conservative spread fills are not implemented yet."
+    },
+    "put_debit_spread": {
+      "enabled": false,
+      "vehicle": "option_spread",
+      "holding_horizon": "21_to_90_days_to_expiration",
+      "blocked_reason": "Multi-leg quote synchronization and conservative spread fills are not implemented yet."
+    }
+  },
+  "options_contract_gate": {
+    "minimum_days_to_expiration": 21,
+    "maximum_days_to_expiration": 90,
+    "minimum_volume": 100,
+    "minimum_open_interest": 500,
+    "maximum_bid_ask_spread_pct": 0.15,
+    "maximum_implied_volatility": 1.2,
+    "maximum_moneyness_distance": 0.1,
+    "maximum_single_idea_premium_pct": 0.0025
+  },
+  "immutable_guardrails": [
+    "Paper trading only; this policy creates no live brokerage authority.",
+    "The Risk Manager may veto any strategy or instrument.",
+    "Naked options, uncovered short options, and unlimited-loss strategies are prohibited.",
+    "A strategy may execute only when its own data requirements pass.",
+    "Missing institutional data must reduce confidence or block the strategy, never be inferred.",
+    "Every strategy choice, rejection, fill, exit, and outcome must be logged by family."
+  ]
+}

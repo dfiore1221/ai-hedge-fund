@@ -13,6 +13,7 @@ from agents.position_manager import (
 from data.paper_fills import fetch_price_snapshot, format_paper_fill_report, process_paper_fills
 from data.trade_journal import load_trade_journal, normalize_status
 from delivery.email_delivery import load_email_config, send_email
+from delivery.email_retry import queue_email
 from memory.research_memory import save_agent_report
 from security.checks import redact_text
 
@@ -22,6 +23,7 @@ REPORTS_DIR = PROJECT_ROOT / "reports" / "intraday_monitor"
 ALERT_STATE_PATH = REPORTS_DIR / "alert_state.json"
 ENTRY_TRIGGER_LOG_PATH = REPORTS_DIR / "entry_trigger_log.json"
 MORNING_BRIEF_JSON_PATH = PROJECT_ROOT / "reports" / "morning_brief" / "daily_morning_brief.json"
+AUTONOMY_REPORTS_DIR = PROJECT_ROOT / "reports" / "autonomy"
 EASTERN = ZoneInfo("America/New_York")
 ACTION_ALERTS = {
     "EXIT",
@@ -76,7 +78,8 @@ def run_intraday_monitor(send_alert=True, dry_run=False, apply_fills=False, save
     checked_symbols = sorted(set(symbols + entry_trigger_check["checked_symbols"]))
 
     state = load_alert_state()
-    new_alerts = [alert for alert in alerts if alert["alert_id"] not in state["sent_alert_ids"]]
+    acknowledged_ids = set(state["sent_alert_ids"]) | set(state.get("queued_alert_ids", []))
+    new_alerts = [alert for alert in alerts if alert["alert_id"] not in acknowledged_ids]
     email_result = None
 
     report = {
@@ -88,7 +91,7 @@ def run_intraday_monitor(send_alert=True, dry_run=False, apply_fills=False, save
         "send_alert": send_alert,
         "dry_run": dry_run,
         "apply_fills": apply_fills,
-        "entry_policy": "alert_only_for_new_entries",
+        "entry_policy": "autonomous_for_selected_paper_orders; monitor_only_for_unselected_setups",
         "checked_symbols": checked_symbols,
         "alert_count": len(alerts),
         "new_alert_count": len(new_alerts),
@@ -129,9 +132,33 @@ def run_intraday_monitor(send_alert=True, dry_run=False, apply_fills=False, save
                 "body_preview": body,
             }
         else:
-            email_result = send_email(subject, body, attachment_path=output_path)
-            mark_alerts_sent(state, new_alerts)
-            save_alert_state(state)
+            try:
+                email_result = send_email(subject, body, attachment_path=output_path)
+            except Exception as exc:
+                pending_path = queue_email(
+                    subject,
+                    body,
+                    attachment_path=output_path,
+                    kind="intraday_alert",
+                    error=exc,
+                    expiry_hours=4,
+                    dedupe_key="|".join(sorted(alert["alert_id"] for alert in new_alerts)),
+                    metadata={
+                        "alert_state_path": str(ALERT_STATE_PATH),
+                        "alert_ids": [alert["alert_id"] for alert in new_alerts],
+                    },
+                )
+                email_result = {
+                    "sent": False,
+                    "queued": True,
+                    "pending_path": str(pending_path),
+                    "error": str(exc),
+                }
+                mark_alerts_queued(state, new_alerts)
+                save_alert_state(state)
+            else:
+                mark_alerts_sent(state, new_alerts)
+                save_alert_state(state)
 
     report["email_result"] = email_result
     save_intraday_monitor_report(report)
@@ -197,6 +224,8 @@ def check_morning_brief_entry_triggers():
         if not hit:
             continue
 
+        selection_reason = autonomous_selection_reason(symbol, idea.get("run_id"))
+
         event = {
             "event_type": "entry_triggered",
             "symbol": symbol,
@@ -211,19 +240,23 @@ def check_morning_brief_entry_triggers():
             "target_1": round_number(idea.get("target_1")),
             "score": round_number(idea.get("score")),
             "reason": idea.get("reason"),
+            "autonomous_selection_reason": selection_reason,
             "price_metadata": metadata.get(symbol, {}),
             "timestamp": datetime.now(EASTERN).isoformat(timespec="seconds"),
-            "action_required": "Review in dashboard; no simulated position was opened automatically.",
+            "action_required": (
+                "No human approval is required. This setup was not selected as an autonomous working "
+                "order, so the trigger is logged for Committee review and learning only."
+            ),
         }
         triggered.append(event)
         alerts.append(build_alert(
             kind="entry_trigger",
-            severity="high",
+            severity="medium",
             symbol=symbol,
-            title=f"{symbol} entry triggered - approval needed",
+            title=f"{symbol} entry reached - setup was not selected",
             message=(
                 f"{symbol} hit the entry threshold near {threshold:.2f}; latest price {latest:.2f}. "
-                "No simulated position was opened automatically."
+                f"No paper trade was placed because: {selection_reason}"
             ),
             payload=event,
             dedupe_key=f"{date.today().isoformat()}|entry_trigger|{symbol}|{idea.get('run_id')}|{threshold:.4f}",
@@ -236,6 +269,46 @@ def check_morning_brief_entry_triggers():
         "triggered": triggered,
         "alerts": alerts,
     }
+
+
+def autonomous_selection_reason(symbol, run_id=None):
+    """Return the latest planner disposition for a setup without implying human approval."""
+    symbol = str(symbol or "").upper().strip()
+    run_id = str(run_id or "").strip()
+    if not symbol or not AUTONOMY_REPORTS_DIR.exists():
+        return "The Committee did not create an autonomous working order for this setup."
+
+    day_prefix = datetime.now(EASTERN).strftime("autonomy_%Y%m%d_")
+    report_paths = sorted(
+        AUTONOMY_REPORTS_DIR.glob(f"{day_prefix}*.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    latest_path = AUTONOMY_REPORTS_DIR / "autonomy.json"
+    if latest_path.exists():
+        report_paths.insert(0, latest_path)
+
+    for path in report_paths:
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        planning = report.get("planning") or {}
+        for order in planning.get("created_orders") or []:
+            if setup_matches(order, symbol, run_id, run_id_key="source_run_id"):
+                return "The planner created an order, but it is not currently active in the paper journal."
+        for rejection in planning.get("rejected_candidates") or []:
+            if setup_matches(rejection, symbol, run_id):
+                return str(rejection.get("reason") or "The setup did not pass the autonomous mandate.")
+
+    return "The Committee did not select this setup during the autonomous planning cycle."
+
+
+def setup_matches(record, symbol, run_id, run_id_key="run_id"):
+    if str(record.get("symbol") or "").upper().strip() != symbol:
+        return False
+    record_run_id = str(record.get(run_id_key) or "").strip()
+    return not run_id or not record_run_id or record_run_id == run_id
 
 
 def load_morning_brief_entry_ideas():
@@ -270,7 +343,7 @@ def planned_journal_keys():
     run_ids = set()
     symbols = set()
     for _, row in frame.iterrows():
-        if normalize_status(row.get("status")) != "planned":
+        if normalize_status(row.get("status")) not in {"planned", "open"}:
             continue
         symbol = str(row.get("symbol", "")).upper().strip()
         run_id = str(row.get("agent_run_id", "")).strip()
@@ -316,10 +389,10 @@ def build_fill_alerts(fill_result):
                 kind="entry_trigger",
                 severity="high",
                 symbol=event.get("symbol"),
-                title=f"{event.get('symbol')} planned entry triggered - approval needed",
+                title=f"{event.get('symbol')} planned entry eligible for automatic fill",
                 message=(
                     f"Planned entry hit at {event.get('fill_price')} "
-                    f"(latest {event.get('latest_price')}); no simulated position was opened automatically."
+                    f"(latest {event.get('latest_price')}); the autonomous execution cycle must apply the fill."
                 ),
                 payload=event,
                 dedupe_key=(
@@ -500,8 +573,9 @@ def create_intraday_email_body(report):
         "",
         "Guardrails",
         "- This is a watch-only/paper-trading alert, not a live trade instruction.",
-        "- Review the dashboard before acting.",
-        "- New entry triggers are alert-only and require human approval.",
+        "- Selected autonomous paper orders can be planned and filled without human approval.",
+        "- Unselected setup triggers are logged for learning and do not become trades unless a later Committee cycle selects them.",
+        "- No live brokerage or real-money authority exists.",
         "- Alerts are deduped so the same event should not email repeatedly today.",
     ])
     return "\n".join(lines) + "\n"
@@ -563,7 +637,8 @@ def format_entry_trigger_check(check):
     for event in triggered:
         lines.append(
             "- {symbol}: latest {latest_price}, threshold {entry_threshold}, stop {stop}, "
-            "target {target_1}; approval required.".format(**event)
+            "target {target_1}; not selected for autonomous execution: "
+            "{autonomous_selection_reason}".format(**event)
         )
     return "\n".join(lines)
 
@@ -574,7 +649,11 @@ def format_email_status(report):
         return "not sent"
     if result.get("dry_run"):
         return "dry run"
-    return f"sent to {result.get('to')}"
+    if result.get("queued"):
+        return "queued for retry"
+    if result.get("sent"):
+        return f"sent to {result.get('to')}"
+    return f"failed: {result.get('error') or 'unknown delivery error'}"
 
 
 def save_intraday_monitor_report(report):
@@ -595,16 +674,17 @@ def save_intraday_monitor_report(report):
 def load_alert_state():
     today = date.today().isoformat()
     if not ALERT_STATE_PATH.exists():
-        return {"date": today, "sent_alert_ids": []}
+        return {"date": today, "sent_alert_ids": [], "queued_alert_ids": []}
     try:
         state = json.loads(ALERT_STATE_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return {"date": today, "sent_alert_ids": []}
+        return {"date": today, "sent_alert_ids": [], "queued_alert_ids": []}
     if state.get("date") != today:
-        return {"date": today, "sent_alert_ids": []}
+        return {"date": today, "sent_alert_ids": [], "queued_alert_ids": []}
     return {
         "date": today,
         "sent_alert_ids": list(state.get("sent_alert_ids", []))[-500:],
+        "queued_alert_ids": list(state.get("queued_alert_ids", []))[-500:],
     }
 
 
@@ -613,6 +693,16 @@ def mark_alerts_sent(state, alerts):
     existing.extend(alert["alert_id"] for alert in alerts)
     state["date"] = date.today().isoformat()
     state["sent_alert_ids"] = sorted(set(existing))[-500:]
+    queued = set(state.get("queued_alert_ids", []))
+    queued.difference_update(alert["alert_id"] for alert in alerts)
+    state["queued_alert_ids"] = sorted(queued)[-500:]
+
+
+def mark_alerts_queued(state, alerts):
+    existing = list(state.get("queued_alert_ids", []))
+    existing.extend(alert["alert_id"] for alert in alerts)
+    state["date"] = date.today().isoformat()
+    state["queued_alert_ids"] = sorted(set(existing))[-500:]
 
 
 def save_alert_state(state):

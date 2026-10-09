@@ -39,6 +39,8 @@ TRADE_COLUMNS = [
 ]
 
 OPEN_STATUSES = {"planned", "open"}
+POSITION_STATUSES = {"open"}
+WORKING_ORDER_STATUSES = {"planned"}
 CLOSED_STATUS = "closed"
 
 
@@ -139,6 +141,33 @@ def close_trade(trade_id, exit_price, exit_reason="", lessons="", closed_at=None
     journal.at[index, "exit_price"] = str(exit_price)
     journal.at[index, "exit_reason"] = exit_reason
     journal.at[index, "lessons"] = lessons
+
+    journal = enrich_trade_metrics(journal)
+    save_trade_journal(journal)
+    return journal.loc[index].to_dict()
+
+
+def cancel_planned_trade(trade_id, reason="", lessons="", canceled_at=None):
+    """Retire an unfilled plan without recording a market exit or realized P&L."""
+    journal = normalize_frame(load_trade_journal())
+    match = journal["id"].astype(str) == str(trade_id)
+    if not match.any():
+        raise ValueError(f"No trade found with id {trade_id}.")
+
+    index = journal[match].index[0]
+    if normalize_status(journal.at[index, "status"]) != "planned":
+        raise ValueError("Only planned, unfilled trades can be canceled.")
+
+    timestamp = canceled_at or now_iso()
+    journal.at[index, "status"] = "cancelled"
+    journal.at[index, "closed_at"] = timestamp
+    journal.at[index, "exit_price"] = ""
+    journal.at[index, "exit_reason"] = reason or "Planned order canceled before fill."
+    journal.at[index, "lessons"] = lessons
+    journal.at[index, "notes"] = append_note(
+        journal.at[index, "notes"],
+        f"Planned order canceled on {timestamp}; no simulated fill or realized P&L was recorded.",
+    )
 
     journal = enrich_trade_metrics(journal)
     save_trade_journal(journal)
@@ -254,10 +283,10 @@ def enrich_trade_metrics(frame, refresh_prices=False):
             frame.at[index, "current_price"] = round_number(price_map[symbol])
 
         current_price = to_float(frame.at[index, "current_price"])
-        if status in OPEN_STATUSES and current_price and entry and shares:
+        if status in POSITION_STATUSES and current_price and entry and shares:
             unrealized_pnl = directional_pnl(side, entry, current_price, shares)
             frame.at[index, "unrealized_pnl"] = round_number(unrealized_pnl)
-        elif status not in OPEN_STATUSES:
+        else:
             frame.at[index, "unrealized_pnl"] = ""
 
         if status == CLOSED_STATUS and exit_price and entry and shares:
@@ -293,7 +322,7 @@ def summarize_trade_journal(frame):
         }
 
     statuses = frame["status"].map(normalize_status)
-    open_frame = frame[statuses.isin(OPEN_STATUSES)]
+    open_frame = frame[statuses.isin(POSITION_STATUSES)]
     planned_frame = frame[statuses == "planned"]
     closed_frame = frame[statuses == CLOSED_STATUS]
     today_closed = filter_closed_since(closed_frame, date.today())

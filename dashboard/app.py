@@ -19,6 +19,7 @@ import yfinance as yf
 from dotenv import load_dotenv
 
 from agents.feedback_loop import generate_feedback_report
+from agents.trade_funnel import generate_trade_funnel_report
 from agents.committee_question import ask_committee
 from agents.weekly_review import (
     format_weekly_review,
@@ -41,8 +42,7 @@ from agents.portfolio_governor import (
     save_portfolio_governor_report,
 )
 from agents.core_etf_sleeve import (
-    approve_core_rebalance_from_brief,
-    build_core_rebalance_approval_id,
+    build_core_rebalance_plan,
 )
 from agents.intraday_monitor import (
     format_intraday_monitor_report,
@@ -71,7 +71,6 @@ from data.options_journal import (
 from data.paper_ledger import build_paper_ledger
 from data.paper_fills import format_paper_fill_report, process_paper_fills
 from data.trade_journal import (
-    OPEN_STATUSES,
     TRADE_JOURNAL_PATH,
     append_trade,
     close_trade,
@@ -199,54 +198,36 @@ def render_core_rebalance_approval(brief_report):
     if not core_sleeve:
         return
 
-    status = core_sleeve.get("status", "n/a")
-    approval_id = build_core_rebalance_approval_id((brief_report or {}).get("created_at"))
-    preview = build_core_rebalance_preview(core_sleeve)
-    if core_rebalance_approval_complete(approval_id, preview):
+    plan = build_core_rebalance_plan(brief_report)
+    if not plan.get("requires_rebalance"):
         return
 
-    with st.expander("Approve Core ETF Sleeve Rebalance", expanded=status == "Rebalance needed."):
-        st.caption("Paper-only workflow. This records simulated ETF lots in the local ledger; it does not send broker orders.")
+    with st.expander("Committee Core ETF Sleeve Rebalance", expanded=True):
+        st.caption(
+            "Committee-managed paper workflow. AIFundOS will add or trim simulated ETF lots during "
+            "regular market hours; it cannot send live broker orders."
+        )
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Status", status)
-        c2.metric("Target Sleeve", money(core_sleeve.get("target_sleeve_value", 0)))
-        c3.metric("Current Sleeve", money(core_sleeve.get("current_sleeve_value", 0)))
-        c4.metric("Drift", money(core_sleeve.get("drift_value", 0)))
+        c1.metric("Status", plan.get("status", "n/a"))
+        c2.metric("Target Sleeve", money(plan.get("target_sleeve_value", 0)))
+        c3.metric("Current Sleeve", money(plan.get("current_sleeve_value", 0)))
+        c4.metric("Drift", money(plan.get("drift_value", 0)))
 
-        if preview:
-            st.dataframe(pd.DataFrame(preview), hide_index=True, width="stretch")
+        if plan.get("orders"):
+            st.dataframe(pd.DataFrame(plan["orders"]), hide_index=True, width="stretch")
         else:
-            st.info("No core sleeve rebalance actions are available from the latest brief.")
+            st.info("No whole-share action currently meets the minimum rebalance size.")
 
         market_session = regular_market_session_status()
         if market_session["is_open"]:
-            st.success(f"Market session open: {market_session['label']}")
+            st.success(
+                "Market session is open. The next autonomous execution cycle will apply this paper rebalance."
+            )
         else:
-            st.warning(f"Rebalance approval is unavailable: {market_session['label']}")
-
-        st.caption(f"Approval ID: {approval_id}")
-        confirmed = st.checkbox(
-            "I approve AIFundOS to record these core ETF rebalance buys in the simulated paper ledger.",
-            key=f"confirm_{approval_id}",
-            disabled=not market_session["is_open"],
-        )
-        disabled = (
-            not market_session["is_open"]
-            or not confirmed
-            or not any(item["action"] == "buy" for item in preview)
-        )
-        if st.button("Approve Core Rebalance Paper Orders", disabled=disabled, type="primary"):
-            result = approve_core_rebalance_from_brief(brief_report)
-            if result["created"]:
-                st.success(f"Created {len(result['created'])} core sleeve paper lot(s).")
-                st.dataframe(pd.DataFrame(result["created"]), hide_index=True, width="stretch")
-            else:
-                st.info("No new core sleeve paper lots were created.")
-            if result["skipped"]:
-                with st.expander("Skipped Items", expanded=True):
-                    st.dataframe(pd.DataFrame(result["skipped"]), hide_index=True, width="stretch")
-            st.rerun()
+            st.warning(
+                "Rebalance is queued for the next regular market-hours cycle. " + market_session["label"]
+            )
 
 
 def build_core_rebalance_preview(core_sleeve):
@@ -394,11 +375,16 @@ def render_data_quality():
         value=min(12, watchlist_size),
         step=1,
     )
-    if controls[2].button("Refresh Data Quality", type="primary"):
+    refresh = controls[2].button("Refresh Data Quality", type="primary")
+    if refresh:
         load_data_health.clear()
-
-    with st.spinner("Checking provider status and watchlist data coverage..."):
-        report = load_data_health(live_checks=live_checks, live_check_limit=int(sample_size))
+        with st.spinner("Checking provider status and watchlist data coverage..."):
+            report = load_data_health(live_checks=live_checks, live_check_limit=int(sample_size))
+    else:
+        report = latest_saved_data_health()
+        if not report:
+            report = load_data_health(live_checks=False, live_check_limit=int(sample_size))
+        st.caption("Showing the latest saved morning-brief data health. Use Refresh Data Quality for new live checks.")
 
     gate = report["gate"]
     coverage = report["coverage"]
@@ -509,15 +495,25 @@ def render_stock_charts():
     interval = controls[3].selectbox("Interval", ["1m", "5m", "15m", "30m", "1h", "1d"], index=5)
 
     symbol = custom_symbol or label_to_symbol.get(selected_label)
-    if st.button("Refresh Chart"):
+    refresh_chart = st.button("Load / Refresh Chart")
+    if refresh_chart:
         load_chart_history.clear()
 
     if not symbol:
         st.info("Select a symbol to chart.")
         return
 
-    with st.spinner(f"Loading chart for {symbol}..."):
-        history, error = load_chart_history(symbol, period, interval)
+    chart_key = (symbol, period, interval)
+    if refresh_chart:
+        with st.spinner(f"Loading chart for {symbol}..."):
+            history, error = load_chart_history(symbol, period, interval)
+        st.session_state["chart_result"] = (chart_key, history, error)
+    else:
+        saved_chart = st.session_state.get("chart_result")
+        if not saved_chart or saved_chart[0] != chart_key:
+            st.info("Press Load / Refresh Chart to request current market data.")
+            return
+        _, history, error = saved_chart
 
     if error:
         st.error(error)
@@ -575,7 +571,7 @@ def render_trade_journal():
         if apply_fills:
             st.rerun()
 
-    journal = enrich_trade_metrics(load_trade_journal(), refresh_prices=True)
+    journal = enrich_trade_metrics(load_trade_journal(), refresh_prices=refresh_prices)
     if refresh_prices:
         st.success("Open trade prices refreshed.")
     if not journal.empty:
@@ -596,7 +592,8 @@ def render_trade_journal():
         **summary,
     }
     statuses = journal["status"].str.lower() if not journal.empty else pd.Series(dtype=str)
-    open_trades = journal[statuses.isin(OPEN_STATUSES)] if not journal.empty else journal
+    open_trades = journal[statuses == "open"] if not journal.empty else journal
+    planned_trades = journal[statuses == "planned"] if not journal.empty else journal
     closed_trades = journal[statuses == "closed"] if not journal.empty else journal
 
     st.markdown("#### Paper Account")
@@ -622,12 +619,12 @@ def render_trade_journal():
 
     st.markdown("#### Trade Journal")
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("Open / Planned", summary["open_trades"])
-    c2.metric("Closed", summary["closed_trades"])
+    c1.metric("Open Positions", summary["open_trades"])
+    c2.metric("Planned Orders", summary.get("planned_trades", len(planned_trades)))
     c3.metric("Realized P&L", money(summary["total_realized_pnl"]))
     c4.metric("Unrealized P&L", money(summary["open_unrealized_pnl"]))
     c5.metric("Open Risk", money(summary["open_planned_risk"]))
-    c6.metric("Avg R", f"{summary['avg_r_multiple']:.2f}")
+    c6.metric("Closed Trades", summary["closed_trades"])
 
     st.caption(
         f"Win rate: {summary['win_rate']:.1f}% | "
@@ -1175,7 +1172,8 @@ def render_position_manager():
         return
 
     try:
-        report = json.loads(latest_path.read_text(encoding="utf-8"))
+        saved_report = json.loads(latest_path.read_text(encoding="utf-8"))
+        report = saved_report
     except json.JSONDecodeError:
         st.error("The latest position manager report could not be read.")
         return
@@ -1236,7 +1234,8 @@ def render_portfolio_governor():
         return
 
     try:
-        report = json.loads(latest_path.read_text(encoding="utf-8"))
+        saved_report = json.loads(latest_path.read_text(encoding="utf-8"))
+        report = saved_report
     except json.JSONDecodeError:
         st.error("The latest portfolio governor report could not be read.")
         return
@@ -1246,7 +1245,9 @@ def render_portfolio_governor():
             save_memory=False,
             refresh_market_data=False,
             persist_prices=False,
+            refresh_benchmarks=False,
         )
+        report["benchmark_attribution"] = saved_report.get("benchmark_attribution") or {}
     except Exception as exc:
         st.warning(f"Showing latest saved Portfolio Governor report. Live dashboard sync failed: {redact_text(str(exc))}")
 
@@ -1256,6 +1257,7 @@ def render_portfolio_governor():
     controls = report.get("risk_controls", {})
     core_rules = report.get("core_rebalance_rules", {})
     attribution = report.get("attribution", {})
+    benchmark = report.get("benchmark_attribution", {})
     costs = report.get("cost_model", {})
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -1302,6 +1304,18 @@ def render_portfolio_governor():
     c1.metric("Realized P&L", money(attribution.get("realized_pnl", 0)))
     c2.metric("Unrealized P&L", money(attribution.get("unrealized_pnl", 0)))
     c3.metric("Total P&L", money(attribution.get("total_pnl", 0)))
+    benchmark_period = benchmark.get("since_inception", {})
+    primary_benchmark = benchmark_period.get("primary", {})
+    benchmark_cols = st.columns(3)
+    benchmark_cols[0].metric("AIFundOS Return", f"{benchmark.get('portfolio_return_pct', 0):.2f}%")
+    benchmark_cols[1].metric(
+        primary_benchmark.get("name", "SPY"),
+        "n/a" if primary_benchmark.get("return_pct") is None else f"{primary_benchmark.get('return_pct'):.2f}%",
+    )
+    benchmark_cols[2].metric(
+        "Active Return",
+        "n/a" if primary_benchmark.get("active_return_pct") is None else f"{primary_benchmark.get('active_return_pct'):.2f}%",
+    )
     source_attr = pd.DataFrame(attribution.get("by_source", []))
     setup_attr = pd.DataFrame(attribution.get("by_setup_type", []))
     if not source_attr.empty:
@@ -1371,6 +1385,7 @@ def render_feedback_loop():
                 st.error(redact_text(str(exc)))
 
     report = generate_feedback_report()
+    funnel = generate_trade_funnel_report(save=False)
     expectancy = report["trade_expectancy"]
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -1380,6 +1395,29 @@ def render_feedback_loop():
     c4.metric("Avg R", f"{expectancy['avg_r']:.2f}")
     c5.metric("Total R", f"{expectancy['total_r']:.2f}")
     c6.metric("Total P&L", money(expectancy["total_pnl"]))
+    evidence = report.get("evidence_progress") or {}
+    st.progress(min(1.0, float(evidence.get("progress_pct", 0)) / 100.0))
+    st.caption(
+        f"Evidence target: {evidence.get('closed_trades', 0)} of "
+        f"{evidence.get('minimum_closed_trade_target', 30)} closed simulated trades; "
+        f"{evidence.get('remaining', 0)} remaining."
+    )
+
+    st.markdown("#### Autonomous Tactical Funnel")
+    funnel_counts = funnel.get("stage_counts") or {}
+    f1, f2, f3, f4, f5, f6, f7 = st.columns(7)
+    f1.metric("Discovered", funnel_counts.get("discovered", 0))
+    f2.metric("Reviewed", funnel_counts.get("committee_reviewed", 0))
+    f3.metric("Qualified", funnel_counts.get("qualified", 0))
+    f4.metric("Planned", funnel_counts.get("orders_planned", 0))
+    f5.metric("Filled", funnel_counts.get("orders_filled", 0))
+    f6.metric("Closed", funnel_counts.get("trades_closed", 0))
+    f7.metric("Profitable", funnel_counts.get("profitable_trades", 0))
+    st.caption(
+        f"Autonomous tactical realized P&L: {money(funnel.get('realized_pnl', 0))} | "
+        f"Risk evidence: {funnel.get('completed_autonomous_tactical_trades', 0)}/30 | "
+        f"Current bottleneck: {(funnel.get('bottleneck') or {}).get('stage', 'n/a')}"
+    )
 
     st.markdown("#### Agent Scorecard")
     agent_scorecard = pd.DataFrame(report["agent_scorecard"])
@@ -1880,6 +1918,11 @@ def load_data_health(live_checks=True, live_check_limit=12):
         live_checks=live_checks,
         live_check_limit=live_check_limit,
     )
+
+
+def latest_saved_data_health():
+    payload = read_json(MORNING_BRIEF_JSON_PATH)
+    return (payload or {}).get("data_health") or {}
 
 
 def money(value):

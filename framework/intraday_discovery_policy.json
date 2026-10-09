@@ -1,0 +1,29 @@
+{
+  "version": "1.2",
+  "enabled": true,
+  "mode": "autonomous_paper_only",
+  "scan_interval_minutes": 10,
+  "execution_interval_minutes": 5,
+  "committee_review_cooldown_minutes": 60,
+  "max_committee_reviews_per_cycle": 1,
+  "max_news_checks_per_cycle": 2,
+  "max_dynamic_news_symbols": 12,
+  "minimum_deep_review_score": 82,
+  "top_ranked_count": 15,
+  "material_move_pct": 1.5,
+  "material_atr_move": 0.75,
+  "volume_pace_ratio": 1.8,
+  "news_score_threshold": 4,
+  "minimum_fresh_quote_coverage_pct": 75,
+  "notify_on_qualified_candidate": true,
+  "notify_on_critical_event": true,
+  "description": "Continuously ranks the configured AIFundOS watchlist plus a bounded set of U.S.-listed symbols discovered in fresh market news, detects material price/news/setup changes, and requests event-driven Committee review. Qualified ideas may enter the existing paper-only autonomous mandate.",
+  "immutable_guardrails": [
+    "Discovery never sends a live brokerage order.",
+    "Only fresh intraday quotes may trigger Committee review or paper-order planning.",
+    "News-discovered symbols must be tagged to a recognized U.S. exchange and pass the same fresh-quote and Committee gates as configured symbols.",
+    "Risk Manager vetoes and portfolio limits remain binding.",
+    "A discovery event is not a trade until the Committee and autonomous paper mandate approve it.",
+    "Every scan, review, candidate handoff, and error is logged."
+  ]
+}

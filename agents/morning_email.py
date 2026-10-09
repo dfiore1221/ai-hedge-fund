@@ -1,3 +1,4 @@
+import fcntl
 from datetime import datetime
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from delivery.email_retry import queue_email
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOG_DIR = PROJECT_ROOT / "reports" / "morning_brief"
+LOCK_PATH = LOG_DIR / "morning_email.lock"
 
 
 def create_email_body(report):
@@ -17,11 +19,12 @@ def create_email_body(report):
     watch = report["worth_watching"]
     rejected = report["rejected_or_avoid"]
     core_sleeve = report.get("core_etf_sleeve") or {}
+    escalations = (report.get("human_escalations") or {}).get("events") or []
 
     lines = [
         "AI Hedge Fund Morning Brief",
         f"Created At: {report['created_at']}",
-        "Mode: Watch Only / No Live Trading",
+        "Mode: Autonomous Paper / No Live Trading",
         "",
         f"Market Regime: {assessment['market_regime']} ({assessment['macro_score']}/100)",
         f"Symbols Scanned: {len(report['symbols_scanned'])}",
@@ -45,11 +48,19 @@ def create_email_body(report):
     lines.extend(format_email_ideas(watch, empty_text="None today."))
     lines.extend(["", "Top Rejected / Avoid Today"])
     lines.extend(format_email_ideas(rejected[:5], empty_text="None surfaced."))
+    lines.extend(["", "Human Review Requests"])
+    if escalations:
+        for event in escalations:
+            lines.append(f"- [{event.get('severity', 'review').upper()}] {event.get('title')}")
+            lines.append(f"  Next step: {event.get('recommended_action')}")
+            lines.append(f"  Boundary: {event.get('prohibited_action')}")
+    else:
+        lines.append("- None today.")
     lines.extend([
         "",
         "Guardrails",
-        "- This is a watch-only research brief, not a live trade instruction.",
-        "- Any paper trade still requires human review before action.",
+        "- The Committee may autonomously manage qualifying simulated positions under the paper mandate.",
+        "- No live brokerage or real-money authority exists.",
         "- Full markdown report is attached.",
     ])
 
@@ -77,6 +88,30 @@ def format_email_ideas(ideas, empty_text):
 
 
 def send_morning_brief_email(dry_run=False):
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    lock_file = LOCK_PATH.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_file.close()
+        return {
+            "dry_run": dry_run,
+            "sent": False,
+            "queued": False,
+            "skipped": True,
+            "subject": "AIFundOS morning brief already running",
+            "body": "A morning brief process already holds the generation lock. This duplicate run exited cleanly.",
+            "report_path": LOG_DIR / "daily_morning_brief.md",
+        }
+
+    try:
+        return generate_and_send_morning_brief(dry_run=dry_run)
+    finally:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+
+
+def generate_and_send_morning_brief(dry_run=False):
     report = create_morning_brief()
     output_path = save_morning_brief(report)
     full_report = format_morning_brief(report)

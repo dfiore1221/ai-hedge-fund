@@ -72,6 +72,35 @@ def fetch_benzinga_news(symbol, days_back=3, limit=20):
     return result
 
 
+def fetch_benzinga_market_news(days_back=1, limit=50):
+    """Fetch market-wide Benzinga stories for outside-watchlist symbol discovery."""
+    api_key = get_benzinga_api_key()
+    if not api_key:
+        return not_configured_response("market_news", "MARKET")
+
+    end_date = date.today()
+    start_date = end_date - timedelta(days=days_back)
+    params = {
+        "token": api_key,
+        "dateFrom": start_date.isoformat(),
+        "dateTo": end_date.isoformat(),
+        "pageSize": limit,
+        "displayOutput": "abstract",
+    }
+    cache_key = f"market-news:v1:{start_date.isoformat()}:{end_date.isoformat()}:{limit}"
+    cached = get_cached_json("benzinga", cache_key, NEWS_TTL_SECONDS)
+    if cached:
+        return cached
+
+    return request_benzinga(
+        endpoint="/v2/news",
+        params=params,
+        symbol="MARKET",
+        response_kind="market_news",
+        cache_key=cache_key,
+    )
+
+
 def fetch_benzinga_ratings(symbol, days_back=180, limit=20):
     api_key = get_benzinga_api_key()
     if not api_key:

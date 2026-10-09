@@ -1,0 +1,44 @@
+{
+  "version": "1.0",
+  "enabled": true,
+  "notification_cooldown_days": 30,
+  "source_code_review": {
+    "minimum_reviewed_setups": 50,
+    "learning_score_below": 60,
+    "minimum_non_email_automation_failures": 3,
+    "recent_watchdog_reports": 10
+  },
+  "data_subscription_review": {
+    "minimum_domain_coverage_ratio": 0.8,
+    "keywords": [
+      "full broker research-note text",
+      "institutional crowding",
+      "trader-tier quiver",
+      "options",
+      "opra",
+      "greeks",
+      "flow provider"
+    ]
+  },
+  "risk_control_review": {
+    "minimum_closed_trades": 30,
+    "minimum_average_r": 0.25,
+    "minimum_win_rate": 50,
+    "minimum_risk_gate_rejections": 10,
+    "minimum_active_return_pct": 0
+  },
+  "real_money_readiness_review": {
+    "minimum_closed_trades": 50,
+    "minimum_average_r": 0.2,
+    "minimum_win_rate": 50,
+    "minimum_total_pnl": 1,
+    "minimum_data_quality_score": 95,
+    "minimum_active_return_pct": 0
+  },
+  "immutable_rules": [
+    "An escalation is a request for human review, never permission to act.",
+    "The Committee may not rewrite source code, purchase data, weaken hard risk controls, connect live brokerage authority, or place real-money orders.",
+    "Risk-control review requires a documented counterfactual test and explicit human approval.",
+    "Real-money readiness requires additional legal, tax, broker, security, operational, and human suitability review outside the paper system."
+  ]
+}

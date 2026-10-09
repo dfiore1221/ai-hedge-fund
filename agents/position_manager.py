@@ -354,6 +354,23 @@ def evaluate_time_stop(trade):
             "status": "core_sleeve_policy",
             "message": "Core ETF sleeve holding; review through sleeve drift/rebalance policy, not a swing-trade time stop.",
         }
+    if "position" in str(trade.get("setup_type") or "").lower():
+        days = trade.get("days_open") or 0
+        open_r = trade.get("open_r_multiple") or 0
+        if days >= 90:
+            return {
+                "status": "stale_review_exit",
+                "message": "Position trade reached its 90-day review boundary; renew the thesis or exit.",
+            }
+        if days >= 20 and open_r <= -0.25:
+            return {
+                "status": "reassess",
+                "message": "Position trade is 20+ days old and losing; require a renewed fundamental thesis before adding.",
+            }
+        return {
+            "status": "ok",
+            "message": "Within the 20-to-90-day position-trade review window.",
+        }
     days = trade.get("days_open") or 0
     open_r = trade.get("open_r_multiple") or 0
     if days >= 10 and open_r < 0.25:

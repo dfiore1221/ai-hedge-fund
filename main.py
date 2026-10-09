@@ -170,6 +170,7 @@ def portfolio(ticker):
 def journal(action):
     try:
         from data.trade_journal import (
+            cancel_planned_trade,
             close_trade,
             format_trade_journal_summary,
             load_trade_journal,
@@ -231,6 +232,21 @@ def journal(action):
         print(format_trade_journal_summary(summarize_trade_journal(load_trade_journal())))
         return
 
+    if action == "cancel":
+        if len(sys.argv) < 4:
+            raise ValueError(
+                "Usage: python3 main.py journal cancel TRADE_ID "
+                "[--reason TEXT] [--lessons TEXT]"
+            )
+        trade = cancel_planned_trade(
+            trade_id=sys.argv[3],
+            reason=get_cli_option("--reason", "Planned order canceled before fill."),
+            lessons=get_cli_option("--lessons", ""),
+        )
+        print(f"Canceled planned simulated trade: {trade['id']} ({trade['symbol']})")
+        print(format_trade_journal_summary(summarize_trade_journal(load_trade_journal())))
+        return
+
     if action == "partial-close":
         if len(sys.argv) < 6:
             raise ValueError(
@@ -276,7 +292,7 @@ def journal(action):
         print(format_trade_journal_summary(summarize_trade_journal(load_trade_journal())))
         return
 
-    raise ValueError("Journal command supports: summary, open, close, partial-close, update-levels")
+    raise ValueError("Journal command supports: summary, open, close, cancel, partial-close, update-levels")
 
 
 def ledger(action):
@@ -350,7 +366,15 @@ def fills(action):
             "A required package is missing. Run `pip install -r requirements.txt` and try again."
         ) from exc
 
-    result = process_paper_fills(apply=action.lower() == "apply")
+    apply = action.lower() == "apply"
+    if apply and "--force" not in sys.argv[3:]:
+        from agents.autonomous_paper import is_regular_market_hours
+
+        if not is_regular_market_hours():
+            print("Paper Fill Check\n\nMarket is closed. No simulated fills were applied.")
+            return
+
+    result = process_paper_fills(apply=apply)
     print(format_paper_fill_report(result))
 
 
@@ -549,6 +573,29 @@ def automation_watchdog(action):
     print(f"Saved automation watchdog report to: {output_path}")
 
 
+def autonomy(action):
+    try:
+        from agents.autonomous_paper import format_autonomy_report, run_autonomy_cycle
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "A required package is missing. Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    report = run_autonomy_cycle(action=action)
+    print(format_autonomy_report(report))
+    print(f"Saved autonomy report to: {report['report_path']}")
+
+
+def human_escalations(action):
+    if str(action).lower() not in {"check", "notify", "status"}:
+        raise ValueError("Human-escalations supports: check, notify")
+    from agents.human_escalation import format_human_escalation_report, run_human_escalation_check
+
+    report = run_human_escalation_check(notify=str(action).lower() == "notify")
+    print(format_human_escalation_report(report))
+    print(f"Saved human escalation report to: {report['report_path']}")
+
+
 def top_pick_backtest(action):
     try:
         from agents.weekly_setup_backtest import (
@@ -720,6 +767,24 @@ def email_retry(action):
         kind = "morning_brief"
     report = retry_pending_emails(kind=kind)
     print(format_retry_report(report))
+
+
+def email_health(action):
+    if str(action).lower() not in {"check", "status"}:
+        raise ValueError("Email-health supports: check")
+    from delivery.email_delivery import check_email_health
+
+    result = check_email_health()
+    print("# Email Delivery Health")
+    print("")
+    print(f"Status: {result.get('status')}")
+    if result.get("host"):
+        print(f"SMTP: {result.get('host')}:{result.get('port')}")
+    if result.get("username"):
+        print(f"Account: {result.get('username')}")
+    if result.get("error"):
+        print(f"Error: {result.get('error')}")
+    print(f"Action: {result.get('action')}")
 
 
 def dashboard(_arg=None):
@@ -1030,6 +1095,42 @@ def intraday_monitor(period):
     print(f"Saved intraday monitor report to: {report['report_path']}")
 
 
+def intraday_discovery(period):
+    if str(period).lower() not in {"now", "today"}:
+        raise ValueError("Intraday discovery currently supports: now")
+    from agents.intraday_discovery import (
+        format_intraday_discovery_report,
+        run_intraday_discovery,
+    )
+
+    report = run_intraday_discovery(
+        review_material="--no-review" not in sys.argv[3:],
+        send_alert="--no-email" not in sys.argv[3:],
+        dry_run="--dry-run" in sys.argv[3:],
+    )
+    print(format_intraday_discovery_report(report))
+    print(f"Saved intraday discovery report to: {report['report_path']}")
+
+
+def strategy_review(action):
+    if str(action).lower() not in {"run", "today"}:
+        raise ValueError("Strategy review supports: run")
+    from agents.strategy_review import format_strategy_source_review, generate_strategy_source_review
+
+    report = generate_strategy_source_review(save_memory=True)
+    print(format_strategy_source_review(report))
+
+
+def trade_funnel(action):
+    if str(action).lower() not in {"status", "run"}:
+        raise ValueError("Trade funnel supports: status")
+    from agents.trade_funnel import format_trade_funnel_report, generate_trade_funnel_report
+
+    report = generate_trade_funnel_report(save=True)
+    print(format_trade_funnel_report(report))
+    print(f"Saved trade funnel report to: {report['report_path']}")
+
+
 def main():
     if len(sys.argv) < 3:
         print("Usage:")
@@ -1038,6 +1139,7 @@ def main():
         print("  python3 main.py morning-email today")
         print("  python3 main.py morning-email today --dry-run")
         print("  python3 main.py email-retry morning")
+        print("  python3 main.py email-health check")
         print("  python3 main.py macro today")
         print("  python3 main.py technical MSFT")
         print("  python3 main.py risk MSFT")
@@ -1068,7 +1170,16 @@ def main():
         print("  python3 main.py position-manager today --llm")
         print("  python3 main.py intraday-monitor now")
         print("  python3 main.py intraday-monitor now --dry-run")
+        print("  python3 main.py intraday-discovery now")
+        print("  python3 main.py intraday-discovery now --dry-run")
         print("  python3 main.py automation-watchdog run")
+        print("  python3 main.py autonomy plan")
+        print("  python3 main.py autonomy execute")
+        print("  python3 main.py autonomy status")
+        print("  python3 main.py strategy-review run")
+        print("  python3 main.py funnel status")
+        print("  python3 main.py human-escalations check")
+        print("  python3 main.py human-escalations notify")
         print("  python3 main.py security check")
         print("  python3 main.py data-health today")
         print("  python3 main.py project status")
@@ -1102,6 +1213,8 @@ def main():
             morning_email(ticker, dry_run=dry_run)
         elif command == "email-retry":
             email_retry(ticker)
+        elif command == "email-health":
+            email_health(ticker)
         elif command == "macro":
             macro(ticker)
         elif command == "technical":
@@ -1142,8 +1255,18 @@ def main():
             position_manager(ticker)
         elif command == "intraday-monitor":
             intraday_monitor(ticker)
+        elif command == "intraday-discovery":
+            intraday_discovery(ticker)
         elif command == "automation-watchdog":
             automation_watchdog(ticker)
+        elif command == "autonomy":
+            autonomy(ticker)
+        elif command == "strategy-review":
+            strategy_review(ticker)
+        elif command == "funnel":
+            trade_funnel(ticker)
+        elif command == "human-escalations":
+            human_escalations(ticker)
         elif command == "security":
             security(ticker)
         elif command == "data-health":

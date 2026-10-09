@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 
 from data.trade_journal import CLOSED_STATUS, enrich_trade_metrics, load_trade_journal
+from data.options_journal import enrich_options_metrics, load_options_journal
 from memory.research_memory import get_agent_reports_for_run, get_recent_daily_setup_reviews
 
 
@@ -16,15 +17,28 @@ def generate_feedback_report():
     closed_trades = trades[trades["status"] == CLOSED_STATUS].copy() if not trades.empty else trades
     closed_trades = add_decision_context(closed_trades)
     setup_reviews = get_recent_daily_setup_reviews(limit=100)
+    options = enrich_options_metrics(load_options_journal())
+    closed_options = options[options["status"] == "closed"].copy() if not options.empty else options
 
+    closed_count = len(closed_trades)
+    evidence_target = 30
     return {
         "agent": "Feedback Loop",
         "system_role": "memory_layer",
         "layer": "Outcome Feedback",
         "created_at": datetime.now().isoformat(timespec="seconds"),
-        "closed_trades_count": len(closed_trades),
+        "closed_trades_count": closed_count,
+        "evidence_progress": {
+            "minimum_closed_trade_target": evidence_target,
+            "closed_trades": closed_count,
+            "remaining": max(0, evidence_target - closed_count),
+            "progress_pct": min(100.0, pct(closed_count, evidence_target)),
+            "status": "minimum_sample_reached" if closed_count >= evidence_target else "building_sample",
+        },
         "linked_trades_count": count_linked_trades(closed_trades),
         "trade_expectancy": summarize_closed_trades(closed_trades),
+        "options_expectancy": summarize_closed_options(closed_options),
+        "by_option_strategy": summarize_option_groups(closed_options),
         "by_setup_type": summarize_group(closed_trades, "setup_type"),
         "by_source": summarize_group(closed_trades, "source"),
         "by_symbol": summarize_group(closed_trades, "symbol"),
@@ -34,6 +48,45 @@ def generate_feedback_report():
         "lessons": extract_lessons(closed_trades),
         "missing_information": collect_missing_information(closed_trades),
     }
+
+
+def summarize_closed_options(closed_options):
+    if closed_options is None or closed_options.empty:
+        return {
+            "count": 0,
+            "wins": 0,
+            "losses": 0,
+            "win_rate": 0,
+            "avg_return_pct": 0,
+            "total_pnl": 0,
+        }
+    outcomes = closed_options["outcome"].astype(str).str.lower()
+    wins = int((outcomes == "win").sum())
+    losses = int((outcomes == "loss").sum())
+    count = len(closed_options)
+    returns = pd.to_numeric(closed_options.get("return_pct"), errors="coerce").fillna(0)
+    pnl = pd.to_numeric(closed_options.get("realized_pnl"), errors="coerce").fillna(0)
+    return {
+        "count": count,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": pct(wins, count),
+        "avg_return_pct": float(returns.mean()) if count else 0,
+        "total_pnl": float(pnl.sum()),
+    }
+
+
+def summarize_option_groups(closed_options):
+    if closed_options is None or closed_options.empty:
+        return []
+    rows = []
+    for strategy, group in closed_options.groupby("strategy", dropna=False):
+        row = summarize_closed_options(group)
+        row["strategy_family"] = str(strategy or "unclassified")
+        row["entered_count"] = row["count"]
+        row["target_1_hit_rate"] = row["win_rate"]
+        rows.append(row)
+    return sorted(rows, key=lambda item: (item["count"], item["avg_return_pct"]), reverse=True)
 
 
 def add_decision_context(closed_trades):
@@ -243,9 +296,36 @@ def summarize_setup_reviews(reviews):
         "avg_max_favorable_move_pct": avg_mfe,
         "avg_max_adverse_move_pct": avg_mae,
         "learning_score": learning_score,
+        "by_strategy_family": summarize_review_groups(reviews, "strategy_family"),
         "read": setup_learning_read(learning_score, entered_count),
         "lessons": lessons,
     }
+
+
+def summarize_review_groups(reviews, field):
+    grouped = {}
+    for review in reviews:
+        output = review.get("output") or {}
+        value = output.get(field) or ("legacy_swing" if field == "strategy_family" else "Unclassified")
+        grouped.setdefault(str(value), []).append(review)
+
+    rows = []
+    for value, items in grouped.items():
+        entered = [item for item in items if item.get("entered")]
+        target_hits = sum(bool(item.get("hit_target_1")) for item in entered)
+        partial_hits = sum(bool((item.get("output") or {}).get("hit_partial_win")) for item in entered)
+        stop_hits = sum(bool(item.get("hit_stop")) for item in entered)
+        pnl_values = [float(item["pnl_pct"]) for item in entered if item.get("pnl_pct") is not None]
+        rows.append({
+            field: value,
+            "reviewed_count": len(items),
+            "entered_count": len(entered),
+            "target_1_hit_rate": pct(target_hits, len(entered)),
+            "partial_win_rate": pct(partial_hits, len(entered)),
+            "stop_first_rate": pct(stop_hits, len(entered)),
+            "avg_pnl_pct": average(pnl_values),
+        })
+    return sorted(rows, key=lambda item: (item["entered_count"], item["avg_pnl_pct"]), reverse=True)
 
 
 def setup_learning_score(reviewed_count, entered_count, target_rate, partial_rate, stop_rate, avg_pnl, avg_mfe, avg_mae):
@@ -490,6 +570,36 @@ def format_feedback_report(report):
         "## Trade Expectancy",
     ]
     lines.extend(format_summary_lines(report["trade_expectancy"]))
+    options = report.get("options_expectancy") or {}
+    lines.extend([
+        "",
+        "## Options Expectancy",
+        f"- Count: {options.get('count', 0)}",
+        f"- Wins: {options.get('wins', 0)}",
+        f"- Losses: {options.get('losses', 0)}",
+        f"- Win Rate: {float(options.get('win_rate', 0)):.1f}%",
+        f"- Average Premium Return: {float(options.get('avg_return_pct', 0)):.1f}%",
+        f"- Total Options P&L: ${float(options.get('total_pnl', 0)):,.2f}",
+    ])
+    option_groups = report.get("by_option_strategy") or []
+    if option_groups:
+        lines.extend(["", "### By Options Strategy"])
+        for row in option_groups:
+            lines.append(
+                f"- {row.get('strategy_family')}: {row.get('count')} closed, "
+                f"win rate {float(row.get('win_rate', 0)):.1f}%, "
+                f"average return {float(row.get('avg_return_pct', 0)):.1f}%, "
+                f"P&L ${float(row.get('total_pnl', 0)):,.2f}."
+            )
+    evidence = report.get("evidence_progress") or {}
+    lines.extend([
+        "",
+        "## Evidence Progress",
+        f"- Closed trades: {evidence.get('closed_trades', 0)} / {evidence.get('minimum_closed_trade_target', 30)}",
+        f"- Progress: {float(evidence.get('progress_pct', 0)):.1f}%",
+        f"- Remaining: {evidence.get('remaining', 0)}",
+        f"- Status: {evidence.get('status', 'building_sample')}",
+    ])
 
     sections = [
         ("Setup Type", "setup_type", report["by_setup_type"]),
@@ -506,6 +616,16 @@ def format_feedback_report(report):
 
     lines.extend(["", "## Daily Setup Review Learning"])
     lines.extend(format_setup_learning(report["setup_review_learning"]))
+    strategy_rows = (report.get("setup_review_learning") or {}).get("by_strategy_family") or []
+    if strategy_rows:
+        lines.extend(["", "### By Strategy Family"])
+        for row in strategy_rows:
+            lines.append(
+                f"- {row.get('strategy_family')}: {row.get('reviewed_count')} reviewed, "
+                f"{row.get('entered_count')} entered, Target 1 "
+                f"{float(row.get('target_1_hit_rate', 0)):.1f}%, average P&L "
+                f"{float(row.get('avg_pnl_pct', 0)):.2f}%."
+            )
 
     lines.extend(["", "## Recent Lessons"])
     if report["lessons"]:

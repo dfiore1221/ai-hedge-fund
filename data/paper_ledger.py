@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -12,6 +12,12 @@ from data.trade_journal import (
     normalize_status,
     to_float,
 )
+from data.options_journal import (
+    CONTRACT_MULTIPLIER,
+    enrich_options_metrics,
+    load_options_journal,
+    normalize_status as normalize_option_status,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +27,7 @@ DEFAULT_STARTING_CASH = 100000.0
 
 def build_paper_ledger(frame=None):
     journal = enrich_trade_metrics(frame if frame is not None else load_trade_journal())
+    options_journal = enrich_options_metrics(load_options_journal())
     starting_cash = load_starting_cash()
     raw_transactions = []
     planned_orders = []
@@ -38,10 +45,34 @@ def build_paper_ledger(frame=None):
         if status == CLOSED_STATUS and normalized["exit_price"] > 0:
             raw_transactions.append(build_close_transaction(normalized))
 
+    option_positions = []
+    option_realized_pnl = 0.0
+    for _, row in options_journal.iterrows():
+        option = normalize_option_trade(row)
+        if not option["symbol"] or option["contracts"] <= 0 or option["entry_premium"] <= 0:
+            continue
+        if option["status"] == "planned":
+            planned_orders.append(build_planned_option_order(option))
+            continue
+        if option["status"] in {"open", "closed"}:
+            raw_transactions.append(build_option_open_transaction(option))
+        if option["status"] == "closed" and option["exit_premium"] > 0:
+            raw_transactions.append(build_option_close_transaction(option))
+            option_realized_pnl += option["realized_pnl"]
+        elif option["status"] == "open":
+            option_positions.append(build_option_position(option))
+
     transactions = add_cash_balances(raw_transactions, starting_cash)
-    positions = build_open_positions(journal)
+    positions = build_open_positions(journal) + option_positions
     lots = build_open_lots(journal)
-    account = summarize_account(starting_cash, transactions, positions, planned_orders, journal)
+    account = summarize_account(
+        starting_cash,
+        transactions,
+        positions,
+        planned_orders,
+        journal,
+        option_realized_pnl=option_realized_pnl,
+    )
 
     return {
         "account": account,
@@ -95,14 +126,102 @@ def build_close_transaction(trade):
     return build_transaction(trade, trade["closed_at"], action, trade["exit_price"], gross, cash_delta)
 
 
-def build_transaction(trade, timestamp, action, price, gross, cash_delta):
+def normalize_option_trade(row):
+    multiplier = to_float(row.get("multiplier")) or CONTRACT_MULTIPLIER
+    entry = to_float(row.get("entry_premium"))
+    current = to_float(row.get("current_premium")) or entry
+    return {
+        "id": str(row.get("id") or "").strip(),
+        "opened_at": str(row.get("filled_at") or row.get("opened_at") or "").strip(),
+        "closed_at": str(row.get("closed_at") or "").strip(),
+        "symbol": str(row.get("symbol") or "").upper().strip(),
+        "contract_symbol": str(row.get("contract_symbol") or "").strip(),
+        "strategy": str(row.get("strategy") or "").strip(),
+        "option_type": str(row.get("option_type") or "").strip(),
+        "expiration": str(row.get("expiration") or "").strip(),
+        "strike": to_float(row.get("strike")),
+        "status": normalize_option_status(row.get("status")),
+        "contracts": to_float(row.get("contracts")),
+        "multiplier": multiplier,
+        "entry_premium": entry,
+        "current_premium": current,
+        "exit_premium": to_float(row.get("exit_premium")),
+        "premium_paid": entry * to_float(row.get("contracts")) * multiplier,
+        "current_value": current * to_float(row.get("contracts")) * multiplier,
+        "realized_pnl": to_float(row.get("realized_pnl")),
+        "source": str(row.get("source") or "").strip(),
+        "agent_run_id": str(row.get("agent_run_id") or "").strip(),
+    }
+
+
+def build_option_open_transaction(option):
+    gross = option["premium_paid"]
+    return build_transaction(
+        option,
+        option["opened_at"],
+        "BUY_OPTION_TO_OPEN",
+        option["entry_premium"],
+        gross,
+        -gross,
+        quantity=option["contracts"],
+    )
+
+
+def build_option_close_transaction(option):
+    gross = option["exit_premium"] * option["contracts"] * option["multiplier"]
+    return build_transaction(
+        option,
+        option["closed_at"],
+        "SELL_OPTION_TO_CLOSE",
+        option["exit_premium"],
+        gross,
+        gross,
+        quantity=option["contracts"],
+    )
+
+
+def build_option_position(option):
+    return {
+        "symbol": option["contract_symbol"] or f"{option['symbol']} {option['option_type'].upper()}",
+        "underlying_symbol": option["symbol"],
+        "side": "long",
+        "instrument_type": "option",
+        "strategy": option["strategy"],
+        "quantity": option["contracts"],
+        "average_cost": option["entry_premium"],
+        "cost_basis": option["premium_paid"],
+        "last_price": option["current_premium"],
+        "market_value": option["current_value"],
+        "unrealized_pnl": option["current_value"] - option["premium_paid"],
+        "planned_risk": option["premium_paid"],
+        "lots": 1,
+    }
+
+
+def build_planned_option_order(option):
+    return {
+        "trade_id": option["id"],
+        "symbol": option["contract_symbol"] or option["symbol"],
+        "underlying_symbol": option["symbol"],
+        "side": "long",
+        "instrument_type": "option",
+        "quantity": option["contracts"],
+        "entry": option["entry_premium"],
+        "notional": option["premium_paid"],
+        "planned_risk": option["premium_paid"],
+        "source": option["source"],
+        "agent_run_id": option["agent_run_id"],
+    }
+
+
+def build_transaction(trade, timestamp, action, price, gross, cash_delta, quantity=None):
     return {
         "timestamp": timestamp or datetime.now().isoformat(timespec="seconds"),
         "trade_id": trade["id"],
         "symbol": trade["symbol"],
         "side": trade["side"],
         "action": action,
-        "quantity": trade["shares"],
+        "quantity": trade.get("shares") if quantity is None else quantity,
         "price": price,
         "gross_amount": gross,
         "fees": 0.0,
@@ -211,7 +330,7 @@ def build_planned_order(trade):
     }
 
 
-def summarize_account(starting_cash, transactions, positions, planned_orders, journal):
+def summarize_account(starting_cash, transactions, positions, planned_orders, journal, option_realized_pnl=0.0):
     cash_balance = transactions[-1]["cash_balance"] if transactions else starting_cash
     long_market_value = sum(
         position["market_value"] for position in positions if position["side"] == "long"
@@ -225,7 +344,7 @@ def summarize_account(starting_cash, transactions, positions, planned_orders, jo
         to_float(row.get("realized_pnl"))
         for _, row in journal.iterrows()
         if normalize_status(row.get("status")) == CLOSED_STATUS
-    )
+    ) + float(option_realized_pnl or 0)
     net_liquidation_value = cash_balance + long_market_value - short_market_value
     planned_order_value = sum(order["notional"] for order in planned_orders)
     open_risk = sum(position["planned_risk"] for position in positions)
@@ -257,7 +376,7 @@ def build_warnings(account):
         warnings.append("Cash balance is negative; simulated account is using margin-like exposure.")
     if account["planned_order_value"] > account["buying_power"]:
         warnings.append("Planned order value exceeds current buying power.")
-    warnings.append("Paper ledger excludes commissions, slippage, dividends, interest, borrow fees, and tax lots.")
+    warnings.append("Paper ledger models option entries at ask and exits at bid, but excludes commissions, dividends, interest, borrow fees, taxes, and assignment/exercise.")
     return warnings
 
 
@@ -280,9 +399,12 @@ def parse_datetime(value):
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
 def directional_pnl(side, entry, current_or_exit, shares):

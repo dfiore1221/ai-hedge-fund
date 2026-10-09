@@ -1,5 +1,5 @@
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -17,9 +17,10 @@ from data.local_cache import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = PROJECT_ROOT / ".env"
 TIINGO_INTRADAY_BASE_URL = "https://api.tiingo.com/tiingo/equity/intraday"
+TIINGO_IEX_BASE_URL = "https://api.tiingo.com/iex"
 TIINGO_DAILY_BASE_URL = "https://api.tiingo.com/tiingo/daily"
 DEFAULT_TIMEOUT = 15
-LATEST_PRICE_TTL_SECONDS = ttl_seconds(minutes=15)
+LATEST_PRICE_TTL_SECONDS = ttl_seconds(minutes=2)
 DAILY_PRICE_TTL_SECONDS = ttl_seconds(hours=6)
 STALE_FALLBACK_SECONDS = ttl_seconds(hours=8)
 DAILY_STALE_FALLBACK_SECONDS = ttl_seconds(days=3)
@@ -35,7 +36,7 @@ def is_tiingo_configured():
     return bool(get_tiingo_api_key())
 
 
-def fetch_latest_equity_prices(symbols):
+def fetch_latest_equity_prices(symbols, individual_fallback_limit=None):
     symbols = [symbol.upper().strip() for symbol in symbols if symbol and symbol.strip()]
     api_key = get_tiingo_api_key()
     if not symbols:
@@ -60,18 +61,28 @@ def fetch_latest_equity_prices(symbols):
     if cached:
         return cached
 
-    prices = {}
-    errors = {}
-    for symbol in symbols:
+    batch = fetch_latest_equity_price_batch(symbols, api_key)
+    prices = dict(batch.get("prices") or {})
+    errors = dict(batch.get("errors") or {})
+
+    missing_symbols = [symbol for symbol in symbols if symbol not in prices]
+    if individual_fallback_limit is not None:
+        missing_symbols = missing_symbols[:max(0, int(individual_fallback_limit))]
+
+    for symbol in missing_symbols:
+        if symbol in prices:
+            continue
         result = fetch_latest_equity_price(symbol, api_key)
         if result.get("status") == "ok":
             prices[symbol] = result["price"]
-        else:
-            errors[symbol] = result.get("error") or result.get("status")
-            fallback = latest_price_from_daily(symbol)
-            if fallback:
-                prices[symbol] = fallback
-                errors[symbol] = f"{errors[symbol]}; using daily fallback"
+            errors.pop(symbol, None)
+            continue
+
+        errors[symbol] = result.get("error") or errors.get(symbol) or result.get("status")
+        fallback = latest_price_from_daily(symbol)
+        if fallback:
+            prices[symbol] = fallback
+            errors[symbol] = f"{errors[symbol]}; using daily fallback"
 
     if not prices:
         stale = get_stale_cached_json("tiingo", cache_key, STALE_FALLBACK_SECONDS)
@@ -95,10 +106,71 @@ def fetch_latest_equity_prices(symbols):
         "symbol_count": len(symbols),
         "price_count": len(prices),
         "errors": errors,
-        "cache": {"status": "fresh", "ttl_minutes": 15},
+        "request_mode": batch.get("request_mode", "individual"),
+        "cache": {"status": "fresh", "ttl_minutes": 2},
     }
     set_cached_json("tiingo", cache_key, result)
     return result
+
+
+def fetch_latest_equity_price_batch(symbols, api_key):
+    """Fetch multiple U.S. equity quotes in one Tiingo IEX request."""
+    headers = {
+        "Authorization": f"Token {api_key}",
+        "Accept": "application/json",
+    }
+    try:
+        response = requests.get(
+            TIINGO_IEX_BASE_URL,
+            headers=headers,
+            params={"tickers": ",".join(symbols)},
+            timeout=DEFAULT_TIMEOUT,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        return {
+            "status": "error",
+            "request_mode": "individual_fallback",
+            "prices": {},
+            "errors": {symbol: f"Tiingo batch quote failed: {exc}" for symbol in symbols},
+        }
+
+    payload = response.json()
+    if not isinstance(payload, list):
+        return {
+            "status": "error",
+            "request_mode": "individual_fallback",
+            "prices": {},
+            "errors": {symbol: "Unexpected Tiingo batch quote response." for symbol in symbols},
+        }
+
+    prices = {}
+    for item in payload:
+        symbol = str(item.get("ticker") or item.get("symbol") or "").upper().strip()
+        price = extract_price(item)
+        if not symbol or price is None:
+            continue
+        prices[symbol] = {
+            "symbol": symbol,
+            "provider": "Tiingo",
+            "timestamp": item.get("timestamp") or item.get("quoteTimestamp") or item.get("date"),
+            "close": price,
+            "open": safe_float(item.get("open")),
+            "high": safe_float(item.get("high")),
+            "low": safe_float(item.get("low")),
+            "volume": safe_int(item.get("volume")),
+            "prev_close": safe_float(item.get("prevClose")),
+            "source_field": price_source_field(item),
+            "freshness": quote_freshness(item.get("timestamp") or item.get("quoteTimestamp") or item.get("date")),
+        }
+
+    missing = [symbol for symbol in symbols if symbol not in prices]
+    return {
+        "status": "ok" if prices and not missing else "partial",
+        "request_mode": "batch",
+        "prices": prices,
+        "errors": {symbol: "No Tiingo batch quote returned." for symbol in missing},
+    }
 
 
 def fetch_latest_equity_price(symbol, api_key):
@@ -139,7 +211,7 @@ def fetch_latest_equity_price(symbol, api_key):
             "low": safe_float(item.get("low")),
             "volume": safe_int(item.get("volume")),
             "source_field": price_source_field(item),
-            "freshness": "intraday_or_latest",
+            "freshness": quote_freshness(item.get("timestamp") or item.get("date")),
         },
     }
 
@@ -337,6 +409,21 @@ def price_source_field(item):
         if safe_float(item.get(key)) is not None:
             return key
     return None
+
+
+def quote_freshness(value, max_age_minutes=30):
+    if not value:
+        return "unknown"
+    try:
+        moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return "unknown"
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - moment.astimezone(timezone.utc)
+    if timedelta(minutes=-2) <= age <= timedelta(minutes=max_age_minutes):
+        return "intraday_or_latest"
+    return "stale_intraday"
 
 
 def build_symbol_error(symbol, error, response=None):

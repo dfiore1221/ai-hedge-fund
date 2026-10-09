@@ -8,7 +8,7 @@ from agents.market_intelligence import generate_daily_market_intelligence
 from agents.feedback_loop import generate_feedback_report
 from data.data_quality import generate_data_health_report
 from data.paper_ledger import build_paper_ledger
-from data.trade_journal import OPEN_STATUSES, enrich_trade_metrics, load_trade_journal, normalize_status, to_float
+from data.trade_journal import enrich_trade_metrics, load_trade_journal, normalize_status, to_float
 from memory.research_memory import save_agent_report, save_committee_question
 
 
@@ -22,11 +22,17 @@ def ask_committee(question, symbol=None, scope="ticker"):
     if not question:
         raise ValueError("Committee question cannot be blank.")
 
+    requested_scope = str(scope or "").strip().lower()
     scope = normalize_scope(scope, symbol)
-    inferred_symbol = infer_symbol_from_question(question)
-    if inferred_symbol and str(symbol or "").upper().strip() != inferred_symbol:
-        symbol = inferred_symbol
-        scope = "ticker"
+    if scope == "ticker":
+        inferred_symbol = infer_symbol_from_question(question)
+        if inferred_symbol and str(symbol or "").upper().strip() != inferred_symbol:
+            symbol = inferred_symbol
+    elif requested_scope not in {"portfolio", "market", "account", "macro"} and not symbol:
+        inferred_symbol = infer_symbol_from_question(question)
+        if inferred_symbol:
+            symbol = inferred_symbol
+            scope = "ticker"
     topic = infer_topic(question)
 
     if scope == "ticker":
@@ -66,7 +72,12 @@ def answer_ticker_question(question, symbol, topic):
             "This question involved an open simulated position, so future review should score the management decision separately from the original entry call.",
         )
     answer = format_ticker_committee_answer(question, cio_report, learning_notes, position_context, feedback)
-    status = "MANAGE OPEN POSITION" if position_context.get("has_open_position") else decision.get("status")
+    if position_context.get("has_open_position"):
+        status = "MANAGE OPEN POSITION"
+    elif position_context.get("has_planned_order"):
+        status = "WORKING ORDER - NOT FILLED"
+    else:
+        status = decision.get("status")
 
     return {
         "agent": "Committee Question",
@@ -174,6 +185,19 @@ def format_ticker_committee_answer(question, cio_report, learning_notes, positio
         ])
         lines.extend(format_position_context(position_context))
         lines.append("")
+    elif position_context.get("has_planned_order"):
+        lines.extend([
+            "- Status: WORKING ORDER - NOT FILLED",
+            f"- Confidence: {format_number(decision.get('confidence'))}",
+            "- Recommended action: Monitor the entry condition; do not manage it as an owned position.",
+            "- Why: The journal contains a planned order, but no simulated entry fill has occurred.",
+            f"- Planned entry: {format_number(position_context.get('entry'))}",
+            f"- Planned stop: {format_number(position_context.get('stop'))}",
+            f"- Planned target: {format_number(position_context.get('target'))}",
+            f"- Planned shares: {format_number(position_context.get('shares'))}",
+            "- Unrealized P&L: n/a until the order fills.",
+            "",
+        ])
     else:
         lines.extend([
             f"- Status: {decision.get('status') or 'n/a'}",
@@ -328,15 +352,32 @@ def build_portfolio_learning_notes(macro_report, ledger, data_health, feedback, 
 def build_position_context(symbol):
     journal = enrich_trade_metrics(load_trade_journal(), refresh_prices=True)
     if journal.empty:
-        return {"has_open_position": False, "symbol": symbol}
+        return {"has_open_position": False, "has_planned_order": False, "symbol": symbol}
 
     symbol = symbol.upper().strip()
-    rows = journal[
-        (journal["symbol"].astype(str).str.upper() == symbol)
-        & (journal["status"].map(normalize_status).isin(OPEN_STATUSES))
-    ].copy()
+    symbol_rows = journal[journal["symbol"].astype(str).str.upper() == symbol].copy()
+    rows = symbol_rows[symbol_rows["status"].map(normalize_status) == "open"].copy()
     if rows.empty:
-        return {"has_open_position": False, "symbol": symbol}
+        planned = symbol_rows[symbol_rows["status"].map(normalize_status) == "planned"]
+        if planned.empty:
+            return {"has_open_position": False, "has_planned_order": False, "symbol": symbol}
+        primary = planned.iloc[0]
+        return {
+            "has_open_position": False,
+            "has_planned_order": True,
+            "symbol": symbol,
+            "trade_id": str(primary.get("id", "")),
+            "side": str(primary.get("side", "")),
+            "setup_type": str(primary.get("setup_type", "")),
+            "source": str(primary.get("source", "")),
+            "agent_run_id": str(primary.get("agent_run_id", "")),
+            "entry": to_float(primary.get("entry")),
+            "stop": to_float(primary.get("stop")),
+            "target": to_float(primary.get("target")),
+            "shares": to_float(primary.get("shares")),
+            "notes": str(primary.get("notes", "")),
+            "thesis": str(primary.get("thesis", "")),
+        }
 
     ledger = build_paper_ledger(journal)
     position = next((item for item in ledger.get("positions", []) if item.get("symbol") == symbol), None)
@@ -353,6 +394,7 @@ def build_position_context(symbol):
 
     return {
         "has_open_position": True,
+        "has_planned_order": False,
         "symbol": symbol,
         "trade_id": str(primary.get("id", "")),
         "side": str(primary.get("side", "")),
@@ -566,7 +608,7 @@ def infer_symbol_from_question(question):
     if not journal.empty:
         for _, row in journal.iterrows():
             symbol = str(row.get("symbol", "")).upper().strip()
-            if symbol and normalize_status(row.get("status")) in OPEN_STATUSES:
+            if symbol and normalize_status(row.get("status")) in {"planned", "open"}:
                 candidates.append(symbol)
 
     candidates.extend(load_watchlist_symbols())

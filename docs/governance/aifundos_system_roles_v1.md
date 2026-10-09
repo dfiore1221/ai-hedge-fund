@@ -1,6 +1,6 @@
 # AIFundOS System Roles
 
-Version: 1.0
+Version: 1.1
 
 ## Purpose
 
@@ -39,18 +39,29 @@ These are evidence sources. They should not sound like extra voting members:
 - Backtest / Quant: historical expectancy evidence attached to a setup.
 - SEC / Fundamentals / Research Facts: primary-source company evidence.
 - Economic Calendar: event risk and timing.
+- Intraday Market Surveillance: configured-watchlist plus bounded U.S.-listed news discovery, quote, volume, setup-level, and news-change detection. It wakes the Committee when evidence changes; it is not another voting agent.
 
 ## Governance Rules
 
 These enforce discipline:
 
-- Watch-only mode unless explicitly paper-approved.
-- Human approval required for paper ledger actions.
+- The Strategy Router is a deterministic governance workflow, not another Committee voice. It converts the Committee decision into an eligible strategy family, horizon, and vehicle without bypassing Risk or data gates.
+
+- Autonomous paper mode may plan, enter, manage, and close qualifying simulated positions without human approval.
+- Watch-only mode remains the fallback when autonomy, data, risk, or tradability gates fail.
+- Human approval remains available for manual overrides and discretionary paper orders.
 - Market-hours guard for rebalance execution realism.
 - Risk veto overrides bullish news, technicals, or thesis.
 - Data gate limits action when evidence is incomplete.
 - Earnings/event guardrails can block new swing entries.
 - Core ETF sleeve uses policy bands and cash-reserve rules.
+- Autonomous risk, order count, position size, and experiment-sleeve parameters may adapt only inside `framework/autonomy_policy.json` bounds.
+- Strategy selection is governed by `framework/strategy_policy.json`; enabled paper families are swing, position, long call, and long put.
+- Scalping and same-day trading remain blocked until their intraday data, spread/slippage, monitoring-frequency, and forced-close requirements pass.
+- Long calls and long puts require a contract-level liquidity check and known premium-at-risk. Multi-leg spreads and naked options are not autonomously executable.
+- Live brokerage execution, live-money credentials, unlimited-loss structures, hidden actions, and removal of hard risk limits are prohibited.
+- The Human Escalation Monitor must notify the operator when evidence suggests a source-code change, paid data review, risk-policy counterfactual, or real-money readiness review may be beneficial.
+- An escalation is not approval. Only the human operator may authorize those restricted changes.
 
 ## Memory And Learning
 
@@ -62,6 +73,11 @@ These should evaluate process quality over time:
 - Weekly review
 - Feedback loop / outcome scoring
 - Lessons on closed simulated trades
+- Benchmark attribution versus SPY and a configurable TSP-style C/S proxy
+- Evidence milestone tracking toward at least 30 closed paper trades, then 50
+- Outcome scoring by strategy family so a weak method can be paused without contaminating every other method
+- Options expectancy and realized premium P&L scored separately from equity trade expectancy
+- Strategy/source review when a mature review sample is not improving the learning score
 
 ## Tools And Workflows
 
@@ -74,8 +90,13 @@ These operate the system but are not Committee voices:
 - Core rebalance approval workflow
 - Position manager
 - Intraday monitor
+- Intraday opportunity engine: scans the full watchlist plus up to 20 U.S.-listed symbols discovered from fresh Benzinga market news every 15 minutes during regular market hours and requests event-driven Committee review.
+- Five-minute paper execution lane: checks planned entries and open-position exits independently of slower research workflows.
 - Email retry queue
 - Desktop net liquidation ticker
+- Autonomous paper planner and execution loop
+- Automation watchdog and private always-on worker
+- Human escalation notification and approval workflow
 
 ## Presentation Rule
 

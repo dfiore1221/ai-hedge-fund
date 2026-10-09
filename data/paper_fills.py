@@ -25,6 +25,7 @@ def process_paper_fills(frame=None, price_map=None, apply=False, allow_entry_fil
     now = datetime.now().isoformat(timespec="seconds")
     events = []
     applied_events = []
+    blocked_quote_events = []
     updated = journal.copy()
     human_exit_trade_ids = {
         str(event.get("trade_id", ""))
@@ -56,6 +57,20 @@ def process_paper_fills(frame=None, price_map=None, apply=False, allow_entry_fil
         if not entry or not shares:
             continue
 
+        if status in {"planned", "open"} and not execution_price_is_fresh(
+            price_snapshot.get("metadata", {}).get(symbol, {}),
+            manual_price_map=price_map is not None,
+        ):
+            blocked_quote_events.append({
+                "trade_id": trade_id,
+                "symbol": symbol,
+                "status": status,
+                "latest_price": round_number(latest),
+                "reason": "Execution blocked because only a stale or daily-fallback quote was available.",
+                "price_metadata": price_snapshot.get("metadata", {}).get(symbol, {}),
+            })
+            continue
+
         event = None
         if status == "planned":
             event = planned_fill_event(row, latest, side, entry, now)
@@ -84,6 +99,7 @@ def process_paper_fills(frame=None, price_map=None, apply=False, allow_entry_fil
         "exit_order_result": exit_order_result,
         "events": events,
         "applied_events": applied_events,
+        "blocked_quote_events": blocked_quote_events,
         "prices": prices,
         "price_metadata": price_snapshot.get("metadata", {}),
         "price_provider_status": price_snapshot.get("provider_status", ""),
@@ -168,6 +184,8 @@ def planned_fill_event(row, latest, side, entry, timestamp):
     if not hit:
         return None
 
+    fill_price = min(latest, entry) if side == "long" else max(latest, entry)
+
     return {
         "trade_id": str(row.get("id", "")),
         "symbol": str(row.get("symbol", "")).upper().strip(),
@@ -175,11 +193,22 @@ def planned_fill_event(row, latest, side, entry, timestamp):
         "event_type": "entry_fill",
         "reason": "planned entry hit",
         "latest_price": round_number(latest),
-        "fill_price": round_number(entry),
+        "fill_price": round_number(fill_price),
         "timestamp": timestamp,
         "old_status": "planned",
         "new_status": "open",
     }
+
+
+def execution_price_is_fresh(metadata, manual_price_map=False):
+    if manual_price_map:
+        return True
+    metadata = metadata or {}
+    freshness = str(metadata.get("freshness") or "").lower()
+    source_field = str(metadata.get("source_field") or "").lower()
+    if "fallback" in freshness or "stale" in freshness or source_field in {"daily_close", "previous_close"}:
+        return False
+    return freshness in {"intraday", "intraday_or_latest", "live", "real_time", "realtime"}
 
 
 def open_exit_event(row, latest, side, stop, target, timestamp):
@@ -216,7 +245,8 @@ def apply_event(journal, index, event):
     if event["event_type"] == "entry_fill":
         journal.at[index, "status"] = "open"
         journal.at[index, "opened_at"] = event["timestamp"]
-        journal.at[index, "current_price"] = event["latest_price"]
+        journal.at[index, "entry"] = str(event["fill_price"])
+        journal.at[index, "current_price"] = str(event["latest_price"])
         journal.at[index, "notes"] = append_note(
             journal.at[index, "notes"],
             f"Auto paper-filled at {event['fill_price']} on {event['timestamp']} "
@@ -227,8 +257,8 @@ def apply_event(journal, index, event):
     if event["event_type"] == "exit_fill":
         journal.at[index, "status"] = CLOSED_STATUS
         journal.at[index, "closed_at"] = event["timestamp"]
-        journal.at[index, "exit_price"] = event["fill_price"]
-        journal.at[index, "current_price"] = event["latest_price"]
+        journal.at[index, "exit_price"] = str(event["fill_price"])
+        journal.at[index, "current_price"] = str(event["latest_price"])
         journal.at[index, "exit_reason"] = event["reason"]
 
 
@@ -249,8 +279,14 @@ def format_paper_fill_report(result):
         f"Symbols Checked: {len(result.get('checked_symbols', []))}",
         f"Events: {len(result.get('events', []))}",
         f"Applied Events: {len(result.get('applied_events', []))}",
+        f"Quote-Blocked Events: {len(result.get('blocked_quote_events', []))}",
         "",
     ]
+
+    for blocked in result.get("blocked_quote_events", []):
+        lines.append(
+            f"- {blocked.get('symbol')}: {blocked.get('reason')} Latest {blocked.get('latest_price')}."
+        )
 
     exit_order_result = result.get("exit_order_result") or {}
     exit_events = exit_order_result.get("events", [])

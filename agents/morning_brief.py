@@ -8,7 +8,13 @@ from pathlib import Path
 
 from agents.cio import create_cio_summary
 from agents.core_etf_sleeve import analyze_core_etf_sleeve
+from agents.benchmark_attribution import generate_benchmark_attribution
+from agents.human_escalation import evaluate_human_escalations, load_policy as load_escalation_policy
 from agents.market_intelligence import generate_daily_market_intelligence
+from agents.feedback_loop import generate_feedback_report
+from agents.strategy_router import route_strategy
+from agents.alternative_data import analyze_alternative_data
+from agents.options_flow import analyze_options_flow
 from data.paper_ledger import build_paper_ledger
 from data.data_quality import generate_data_health_report
 from data.trade_journal import load_trade_journal, summarize_trade_journal
@@ -20,6 +26,7 @@ REPORTS_DIR = PROJECT_ROOT / "reports" / "morning_brief"
 DEFAULT_TOP_N = 10
 DEFAULT_SYMBOL_TIMEOUT_SECONDS = 8
 DEFAULT_MAX_IDEAS_PER_CATEGORY = 2
+DEFAULT_DEEP_RESEARCH_LIMIT = 5
 
 
 def load_watchlist_entries():
@@ -77,6 +84,8 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
     journal_summary = summarize_trade_journal(journal)
     ledger = build_paper_ledger(journal)
     core_sleeve = analyze_core_etf_sleeve(macro_report, journal=journal, ledger=ledger)
+    benchmark_attribution = generate_benchmark_attribution(ledger=ledger, journal=journal)
+    feedback = generate_feedback_report()
     summaries = []
 
     for symbol in symbols:
@@ -89,13 +98,24 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
             "display_symbol": symbol,
             "category": "Uncategorized",
         })
+        summary["strategy_plan"] = route_strategy(
+            summary,
+            data_health=data_health,
+            feedback=feedback,
+        )
         summaries.append(summary)
 
-    ranked = sorted(
+    preliminary_ranked = sorted(
         [summary for summary in summaries if not summary.get("error")],
         key=score_candidate,
         reverse=True,
     )
+    enriched_symbols = enrich_research_shortlist(
+        preliminary_ranked,
+        data_health=data_health,
+        feedback=feedback,
+    )
+    ranked = sorted(preliminary_ranked, key=score_candidate, reverse=True)
     approved = [
         summary
         for summary in ranked
@@ -131,15 +151,18 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
         reverse=True,
     )
 
-    return {
+    report = {
         "agent": "Morning Brief",
         "system_role": "tool_workflow",
         "layer": "Decision Presentation",
         "created_at": datetime.now().isoformat(timespec="seconds"),
-        "mode": "watch_only",
+        "mode": "autonomous_paper_only",
         "data_health": data_health,
         "journal_summary": journal_summary,
         "core_etf_sleeve": core_sleeve,
+        "benchmark_attribution": benchmark_attribution,
+        "strategy_learning": feedback.get("setup_review_learning", {}),
+        "deep_research_symbols": enriched_symbols,
         "macro": macro_report,
         "symbols_scanned": symbols,
         "top_n": max_ideas,
@@ -176,6 +199,45 @@ def create_morning_brief(symbols=None, max_ideas=DEFAULT_TOP_N):
         "committee_summaries": summaries,
         "missing_information": collect_missing_information(summaries, data_health),
     }
+    report["human_escalations"] = evaluate_human_escalations(
+        report,
+        feedback={},
+        policy=load_escalation_policy(),
+    )
+    return report
+
+
+def enrich_research_shortlist(summaries, data_health, feedback, limit=None):
+    limit = limit or int(os.getenv("MORNING_BRIEF_DEEP_RESEARCH_LIMIT", DEFAULT_DEEP_RESEARCH_LIMIT))
+    enriched = []
+    for summary in summaries[:max(0, limit)]:
+        symbol = str(summary.get("symbol") or "").upper().strip()
+        if not symbol:
+            continue
+        try:
+            with symbol_scan_timeout(seconds=15), contextlib.redirect_stderr(io.StringIO()):
+                options_report = analyze_options_flow(symbol, max_expirations=6)
+                alternative_report = analyze_alternative_data(symbol)
+        except Exception as exc:
+            summary.setdefault("deep_research_errors", []).append(str(exc))
+            continue
+
+        source_reports = summary.setdefault("source_reports", {})
+        source_reports["options"] = options_report
+        source_reports["alternative"] = alternative_report
+        summary["options_stance"] = options_report.get("stance")
+        summary["options_confidence"] = options_report.get("confidence")
+        summary["alternative_data_stance"] = alternative_report.get("stance")
+        summary["alternative_data_summary"] = alternative_report.get("summary")
+        summary.setdefault("missing_information", []).extend(options_report.get("missing_information", []))
+        summary.setdefault("missing_information", []).extend(alternative_report.get("missing_information", []))
+        summary["strategy_plan"] = route_strategy(
+            summary,
+            data_health=data_health,
+            feedback=feedback,
+        )
+        enriched.append(symbol)
+    return enriched
 
 
 def build_entries(symbols):
@@ -256,6 +318,7 @@ def score_candidate(summary):
     backtest = source_reports.get("backtest") or {}
     conflict_memo = summary.get("conflict_memo") or {}
     realism = calculate_setup_realism(summary)
+    strategy_family = (summary.get("strategy_plan") or {}).get("selected_family")
 
     if decision.get("status") == "PAPER TRADE ONLY":
         score += 40
@@ -264,7 +327,7 @@ def score_candidate(summary):
     elif decision.get("status") == "WATCHLIST SETUP":
         score += 20
     elif decision.get("status") == "NO TRADE":
-        score -= 5
+        score += 10 if strategy_family == "long_put" else -5
     elif decision.get("status") == "NEEDS DATA":
         score -= 25
 
@@ -275,7 +338,7 @@ def score_candidate(summary):
     elif risk_decision == "watchlist_setup":
         score += 4
     elif risk_decision == "veto":
-        score -= 20
+        score += 8 if strategy_family == "long_put" and (summary.get("strategy_plan") or {}).get("execution_status") == "eligible" else -20
 
     if technical_stance == "bullish":
         score += 25
@@ -284,7 +347,7 @@ def score_candidate(summary):
     elif technical_stance == "no_trade":
         score -= 10
     elif technical_stance == "bearish":
-        score -= 35
+        score += 25 if strategy_family == "long_put" else -35
 
     reward_to_risk = get_reward_to_risk(summary)
     if reward_to_risk is not None:
@@ -340,11 +403,19 @@ def score_candidate(summary):
     if target_rate is not None and target_rate < 20:
         score -= 6
 
+    strategy_plan = summary.get("strategy_plan") or {}
+    if strategy_plan.get("execution_status") == "eligible":
+        score += 5
+    elif strategy_plan.get("execution_status") in {"data_blocked", "learning_hold"}:
+        score -= 10
+    elif strategy_plan.get("execution_status") in {"committee_blocked", "risk_veto"}:
+        score -= 20
+
     fade_signal = failed_long_signal(summary)
     if fade_signal.get("status") == "strong_watch":
-        score -= 18
+        score += 12 if strategy_family == "long_put" else -18
     elif fade_signal.get("status") == "watch":
-        score -= 8
+        score += 6 if strategy_family == "long_put" else -8
 
     if thesis.get("rating") == "Watchlist":
         score += 12
@@ -525,6 +596,7 @@ def summarize_idea(summary):
         "news_top_headline": summary.get("news_top_headline"),
         "thesis_rating": thesis.get("rating"),
         "conflict_count": (summary.get("conflict_memo") or {}).get("conflict_count", 0),
+        "strategy_plan": summary.get("strategy_plan") or {},
     }
 
 
@@ -786,6 +858,7 @@ def format_morning_brief(report):
     data_gate = data_health.get("gate") or {}
     journal_summary = report.get("journal_summary") or {}
     core_sleeve = report.get("core_etf_sleeve") or {}
+    benchmark = report.get("benchmark_attribution") or {}
     macro_interpretation = report["macro"].get("macro_event_interpretation") or {}
     universe_balance = report.get("universe_balance") or {}
 
@@ -793,7 +866,7 @@ def format_morning_brief(report):
         "# AI Hedge Fund Morning Brief",
         "",
         f"Created At: {report['created_at']}",
-        "Mode: Watch Only / No Live Trading",
+        "Mode: Autonomous Paper / No Live Trading",
         "",
         "## CIO Summary",
         f"- Market Regime: {assessment['market_regime']} ({assessment['macro_score']}/100)",
@@ -860,6 +933,7 @@ def format_morning_brief(report):
         f"- Open Unrealized P&L: {format_money(journal_summary.get('open_unrealized_pnl', 0))}",
         f"- Open Planned Risk: {format_money(journal_summary.get('open_planned_risk', 0))}",
         f"- Open Symbols: {', '.join(journal_summary.get('open_symbols') or []) if journal_summary.get('open_symbols') else 'None'}",
+        f"- Portfolio Return Since Inception: {format_number(benchmark.get('portfolio_return_pct'))}%",
         "",
         "## Core ETF Sleeve",
         f"- Status: {core_sleeve.get('status', 'n/a')}",
@@ -945,13 +1019,29 @@ def format_morning_brief(report):
             display = get_display_symbol(summary)
             lines.append(f"- {display}: {summary['error']}")
 
+    escalation = report.get("human_escalations") or {}
+    lines.extend([
+        "",
+        "## Human Review Requests",
+    ])
+    if escalation.get("events"):
+        for event in escalation["events"]:
+            lines.append(f"- [{event.get('severity', 'review').upper()}] {event.get('title')}")
+            lines.append(f"  Next step: {event.get('recommended_action')}")
+            lines.append(f"  Boundary: {event.get('prohibited_action')}")
+    else:
+        lines.append("- None today.")
+
     lines.extend([
         "",
         "## Guardrails",
-        "- This is a watch-only research brief, not a live trade instruction.",
+        "- The Committee may autonomously create and manage qualifying simulated positions under the paper mandate.",
+        "- This is not a live trade instruction and no live brokerage authority exists.",
         "- Risk vetoes override shared evidence such as thesis clues, news, options, or backtests.",
         "- Conditional setups require the stated entry, target, or confirmation before simulated trade approval.",
-        "- Any paper trade still requires human review before action.",
+        "- Human review is optional for autonomous paper experiments; Risk Manager vetoes and hard portfolio limits remain binding.",
+        "- Strategy choice is not limited to swing trades, but each strategy must pass its own data and execution-readiness gates.",
+        "- Scalp and same-day strategies remain blocked until execution-grade intraday data and faster supervision are available.",
         "",
         "## Missing Information",
     ])
@@ -974,6 +1064,18 @@ def append_idea_section(lines, ideas, empty_text, show_guardrail=False):
         lines.append(f"   - Why: {idea['reason'] or 'No clear positive setup.'}")
         if idea.get("run_id"):
             lines.append(f"   - Run ID: {idea['run_id']}")
+        strategy_plan = idea.get("strategy_plan") or {}
+        if strategy_plan:
+            lines.append(
+                f"   - Committee strategy: {strategy_plan.get('selected_family', 'unassigned')} via "
+                f"{strategy_plan.get('vehicle', 'unknown')} | horizon "
+                f"{strategy_plan.get('holding_horizon', 'unknown')} | "
+                f"status {strategy_plan.get('execution_status', 'unknown')}"
+            )
+            for reason in (strategy_plan.get("rationale") or [])[:1]:
+                lines.append(f"   - Strategy rationale: {reason}")
+            for gap in (strategy_plan.get("evidence_gaps") or [])[:1]:
+                lines.append(f"   - Strategy data limit: {gap}")
         lines.append(
             f"   - Setup: entry {format_number(idea['entry_trigger'])}, "
             f"suggested {format_number(idea.get('suggested_entry'))}, "

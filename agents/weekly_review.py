@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from agents.benchmark_attribution import generate_benchmark_attribution
+from data.paper_ledger import build_paper_ledger
 from data.trade_journal import CLOSED_STATUS, enrich_trade_metrics, load_trade_journal
 from memory.research_memory import get_recent_daily_setup_reviews, save_agent_report
 
@@ -36,6 +38,11 @@ def generate_weekly_review(end_day=None):
         "accuracy_review": build_accuracy_review(setup_reviews),
         "lessons": build_weekly_lessons(setup_reviews, closed_trades),
         "reviewed_setups": setup_reviews,
+        "benchmark_attribution": generate_benchmark_attribution(
+            ledger=build_paper_ledger(trades),
+            journal=trades,
+            as_of=end_date,
+        ),
     }
     save_agent_report(
         run_id=f"{end_date.isoformat()}-weekly-review",
@@ -216,6 +223,22 @@ def format_weekly_review(report):
         "## Accurate Calls",
     ]
     lines.extend([f"- {item}" for item in accuracy["accurate"]] or ["- None flagged yet."])
+    benchmark = report.get("benchmark_attribution") or {}
+    period = benchmark.get("since_inception") or {}
+    primary = period.get("primary") or {}
+    lines.extend([
+        "",
+        "## Benchmark Accountability",
+        f"- AIFundOS since inception: {fmt_pct(benchmark.get('portfolio_return_pct'))}",
+        f"- {primary.get('name', primary.get('symbol', 'Primary benchmark'))}: "
+        f"{fmt_pct(primary.get('return_pct'))}",
+        f"- Active return vs primary: {fmt_pct(primary.get('active_return_pct'))}",
+    ])
+    for comparison in period.get("comparisons", []):
+        lines.append(
+            f"- {comparison.get('name')}: {fmt_pct(comparison.get('return_pct'))}; "
+            f"active return {fmt_pct(comparison.get('active_return_pct'))}"
+        )
     lines.append("")
     lines.append("## Way Off / Needs Review")
     lines.extend([f"- {item}" for item in accuracy["way_off"]] or ["- None flagged yet."])

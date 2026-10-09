@@ -1,0 +1,62 @@
+{
+  "version": "1.1",
+  "enabled": true,
+  "mode": "autonomous_paper_only",
+  "description": "Allows AIFundOS to select a strategy family and plan, fill, manage, close, review, and learn from defined-loss simulated positions without human approval. It never authorizes live brokerage activity.",
+  "minimum_data_quality_score": 90,
+  "minimum_candidate_score": 78,
+  "minimum_reward_to_risk": 0.6,
+  "max_new_orders_per_day": 3,
+  "max_planned_order_age_days": 5,
+  "max_new_orders_during_macro_event_risk": 2,
+  "max_open_autonomous_experiments": 8,
+  "max_active_experiments_per_category": 2,
+  "max_autonomous_sleeve_pct": 0.15,
+  "max_position_notional_pct": 0.03,
+  "base_risk_per_trade_pct": 0.0015,
+  "hard_max_risk_per_trade_pct": 0.0025,
+  "minimum_completed_tactical_trades_for_risk_expansion": 30,
+  "pre_evidence_max_risk_per_trade_pct": 0.0015,
+  "pre_evidence_max_new_orders_per_day": 3,
+  "pre_evidence_minimum_candidate_score": 78,
+  "market_hours_only_fills": true,
+  "manage_core_etf_sleeve": true,
+  "allowed_sides": [
+    "long"
+  ],
+  "allowed_decisions": [
+    "PAPER TRADE ONLY",
+    "CONDITIONAL SETUP"
+  ],
+  "allowed_tradability": [
+    "tradable",
+    "starter_only"
+  ],
+  "blocked_vehicles": [
+    "live_broker_order",
+    "naked_option",
+    "unlimited_loss_strategy"
+  ],
+  "allowed_strategy_families": [
+    "swing",
+    "position",
+    "long_call",
+    "long_put"
+  ],
+  "allow_equity_fallback_when_options_data_unavailable": true,
+  "adaptive_bounds": {
+    "minimum_candidate_score": [75, 90],
+    "risk_per_trade_pct": [0.0005, 0.0025],
+    "target_r_multiple": [0.5, 1.25],
+    "max_new_orders_per_day": [1, 3]
+  },
+  "immutable_guardrails": [
+    "Paper trading only; no live brokerage connection or live order authority.",
+    "Risk Manager veto and hard portfolio risk limits cannot be overridden.",
+    "No entry when the data-quality gate is below the policy minimum.",
+    "Only defined-loss instruments may be used.",
+    "Every autonomous decision, fill, exit, and policy adaptation must be logged.",
+    "Risk and daily order capacity may not expand until at least 30 autonomous tactical trades have closed.",
+    "The Committee may tune soft experiment parameters only within adaptive_bounds."
+  ]
+}

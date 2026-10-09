@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "primary_benchmark": {
+    "name": "S&P 500 proxy",
+    "symbol": "SPY",
+    "weight": 1.0
+  },
+  "comparison_benchmarks": [
+    {
+      "name": "TSP C/S proxy (80/20)",
+      "components": [
+        {
+          "symbol": "SPY",
+          "weight": 0.8,
+          "role": "C Fund proxy"
+        },
+        {
+          "symbol": "VXF",
+          "fallback_symbol": "IWM",
+          "weight": 0.2,
+          "role": "S Fund completion-market proxy"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    "SPY is used as a practical C Fund proxy.",
+    "VXF is used as a practical S Fund completion-market proxy, with IWM as a fallback when VXF is unavailable.",
+    "The 80/20 blend is a configurable comparison benchmark, not a claim about the user's actual TSP allocation."
+  ]
+}

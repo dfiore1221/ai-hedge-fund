@@ -1,15 +1,27 @@
 import json
+import math
+from datetime import datetime, time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-from data.paper_fills import fetch_price_map
+from data.paper_fills import execution_price_is_fresh, fetch_price_map, fetch_price_snapshot
 from data.paper_ledger import build_paper_ledger
-from data.trade_journal import append_trade, load_trade_journal, normalize_status, to_float
+from data.trade_journal import (
+    append_trade,
+    close_trade,
+    load_trade_journal,
+    normalize_status,
+    partial_close_trade,
+    save_trade_journal,
+    to_float,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = PROJECT_ROOT / "framework" / "core_etf_sleeve.json"
 CORE_SETUP_TYPE = "core etf sleeve"
 CORE_REBALANCE_MIN_NOTIONAL = 100
+EASTERN = ZoneInfo("America/New_York")
 
 
 def analyze_core_etf_sleeve(macro_report, journal=None, ledger=None):
@@ -271,6 +283,314 @@ def approve_core_rebalance_from_brief(brief_report, min_notional=CORE_REBALANCE_
         "created": created,
         "skipped": skipped,
     }
+
+
+def build_core_rebalance_plan(
+    brief_report,
+    journal=None,
+    ledger=None,
+    price_map=None,
+    min_notional=CORE_REBALANCE_MIN_NOTIONAL,
+):
+    """Build a whole-share rebalance from current holdings, not stale brief balances."""
+    core_sleeve = (brief_report or {}).get("core_etf_sleeve") or {}
+    regime = normalize_regime(core_sleeve.get("regime") or "Neutral")
+    policy = load_policy()
+    profile = select_risk_profile(policy, regime)
+    weights = profile.get("weights") or {}
+    target_sleeve_pct = float(profile.get("target_sleeve_pct") or policy.get("target_sleeve_pct") or 0)
+    journal = journal if journal is not None else load_trade_journal()
+    ledger = ledger or build_paper_ledger(journal)
+    account = ledger.get("account") or {}
+    equity = to_float(account.get("net_liquidation_value") or account.get("starting_cash"))
+    cash = to_float(account.get("cash_balance"))
+    reserve_pct = float(policy.get("cash_reserve_pct") or 0)
+    target_sleeve_value = equity * target_sleeve_pct
+    holdings = current_core_holdings_at_prices(journal, price_map or {})
+    current_value = sum(item["market_value"] for item in holdings.values())
+    drift_value = target_sleeve_value - current_value
+    drift_pct = pct(drift_value, equity)
+    band = float(policy.get("rebalance_band_pct") or 0)
+    requires_rebalance = bool(equity > 0 and abs(drift_pct) > band)
+
+    rows = []
+    sell_proceeds = 0.0
+    symbols = list(weights)
+    symbols.extend(symbol for symbol in holdings if symbol not in weights)
+    for symbol in symbols:
+        price = to_float((price_map or {}).get(symbol)) or to_float(holdings.get(symbol, {}).get("last_price"))
+        current_shares = to_float(holdings.get(symbol, {}).get("shares"))
+        target_value = target_sleeve_value * float(weights.get(symbol) or 0)
+        target_shares = math.floor(target_value / price) if price > 0 else 0
+        share_delta = int(target_shares - current_shares)
+        notional = abs(share_delta) * price
+        action = "hold"
+        if requires_rebalance and price > 0 and notional >= min_notional:
+            action = "buy" if share_delta > 0 else "sell"
+            if action == "sell":
+                sell_proceeds += notional
+        rows.append({
+            "symbol": symbol,
+            "action": action,
+            "shares": abs(share_delta) if action in {"buy", "sell"} else 0,
+            "current_shares": round_money(current_shares),
+            "target_shares": target_shares,
+            "price": round_money(price),
+            "approx_notional": round_money(notional if action in {"buy", "sell"} else 0),
+            "current_value": round_money(current_shares * price),
+            "target_value": round_money(target_value),
+            "difference": round_money(target_value - current_shares * price),
+        })
+
+    available_buy_cash = max(0.0, cash + sell_proceeds - equity * reserve_pct)
+    for row in rows:
+        if row["action"] != "buy":
+            continue
+        affordable = math.floor(available_buy_cash / row["price"]) if row["price"] > 0 else 0
+        approved_shares = min(int(row["shares"]), affordable)
+        if approved_shares <= 0:
+            row["action"] = "hold"
+            row["shares"] = 0
+            row["approx_notional"] = 0.0
+            row["reason"] = "Cash reserve policy leaves no capacity for this purchase."
+            continue
+        row["shares"] = approved_shares
+        row["approx_notional"] = round_money(approved_shares * row["price"])
+        available_buy_cash -= approved_shares * row["price"]
+
+    orders = [row for row in rows if row["action"] in {"buy", "sell"} and row["shares"] > 0]
+    return {
+        "regime": regime,
+        "equity": round_money(equity),
+        "cash_balance": round_money(cash),
+        "cash_reserve_pct": round_pct(reserve_pct),
+        "target_sleeve_pct": round_pct(target_sleeve_pct),
+        "target_sleeve_value": round_money(target_sleeve_value),
+        "current_sleeve_value": round_money(current_value),
+        "current_sleeve_pct": round_pct(pct(current_value, equity)),
+        "drift_value": round_money(drift_value),
+        "drift_pct": round_pct(drift_pct),
+        "rebalance_band_pct": round_pct(band),
+        "requires_rebalance": requires_rebalance,
+        "status": "Rebalance needed." if requires_rebalance else "Within rebalance band.",
+        "orders": orders,
+        "allocations": rows,
+    }
+
+
+def execute_autonomous_core_rebalance(
+    brief_report,
+    now=None,
+    minimum_data_quality_score=90,
+    price_snapshot=None,
+):
+    """Execute a Committee-owned rebalance in the local paper ledger only."""
+    now = normalize_eastern(now)
+    if not is_regular_market_hours(now):
+        return {
+            "status": "deferred",
+            "reason": "Core rebalance waits for regular U.S. market hours.",
+            "market_session": "closed",
+            "actions": [],
+        }
+
+    brief_date = parse_brief_date((brief_report or {}).get("created_at"))
+    if brief_date != now.date():
+        return {
+            "status": "blocked",
+            "reason": "Core rebalance requires a current-day morning brief.",
+            "market_session": "open",
+            "actions": [],
+        }
+
+    data_score = to_float(((brief_report or {}).get("data_health") or {}).get("data_quality_score"))
+    if data_score < float(minimum_data_quality_score):
+        return {
+            "status": "blocked",
+            "reason": (
+                f"Data quality {data_score:.0f}/100 is below the autonomous minimum "
+                f"{float(minimum_data_quality_score):.0f}/100."
+            ),
+            "market_session": "open",
+            "actions": [],
+        }
+
+    core_sleeve = (brief_report or {}).get("core_etf_sleeve") or {}
+    profile = select_risk_profile(load_policy(), core_sleeve.get("regime") or "Neutral")
+    journal = load_trade_journal()
+    held_symbols = set(current_core_holdings(journal))
+    symbols = sorted(set(profile.get("weights") or {}) | held_symbols)
+    snapshot = price_snapshot or fetch_price_snapshot(symbols)
+    prices = snapshot.get("prices") or {}
+    metadata = snapshot.get("metadata") or {}
+    invalid_quotes = [
+        symbol for symbol in symbols
+        if to_float(prices.get(symbol)) <= 0
+        or not execution_price_is_fresh(metadata.get(symbol, {}), manual_price_map=price_snapshot is not None)
+    ]
+    if invalid_quotes:
+        return {
+            "status": "blocked",
+            "reason": "Fresh execution-grade quotes are unavailable for: " + ", ".join(invalid_quotes),
+            "market_session": "open",
+            "actions": [],
+            "quote_provider_status": snapshot.get("provider_status"),
+        }
+
+    journal = apply_core_prices(journal, prices)
+    save_trade_journal(journal)
+    plan = build_core_rebalance_plan(
+        brief_report,
+        journal=journal,
+        ledger=build_paper_ledger(journal),
+        price_map=prices,
+    )
+    if not plan["requires_rebalance"]:
+        return {
+            "status": "no_action",
+            "reason": "Core ETF sleeve is already within the rebalance band.",
+            "market_session": "open",
+            "actions": [],
+            "plan": plan,
+        }
+
+    timestamp = now.isoformat(timespec="seconds")
+    run_id = f"core-rebalance-{now:%Y%m%d}-{plan['regime'].lower()}"
+    actions = []
+    for order in [item for item in plan["orders"] if item["action"] == "sell"]:
+        actions.extend(trim_core_position(order["symbol"], order["shares"], order["price"], run_id, timestamp))
+    for order in [item for item in plan["orders"] if item["action"] == "buy"]:
+        trade_id = append_trade({
+            "symbol": order["symbol"],
+            "side": "long",
+            "status": "open",
+            "setup_type": CORE_SETUP_TYPE,
+            "source": "committee autonomous core rebalance",
+            "agent_run_id": run_id,
+            "entry": order["price"],
+            "stop": 0,
+            "target": 0,
+            "shares": order["shares"],
+            "current_price": order["price"],
+            "thesis": "Committee-managed Core ETF Sleeve allocation rebalance.",
+            "notes": "Paper-only autonomous core rebalance; no broker order was sent.",
+        })
+        actions.append({
+            "action": "buy",
+            "symbol": order["symbol"],
+            "shares": order["shares"],
+            "price": order["price"],
+            "notional": round_money(order["shares"] * order["price"]),
+            "trade_id": trade_id,
+        })
+
+    refreshed = apply_core_prices(load_trade_journal(), prices)
+    save_trade_journal(refreshed)
+    post_plan = build_core_rebalance_plan(
+        brief_report,
+        journal=refreshed,
+        ledger=build_paper_ledger(refreshed),
+        price_map=prices,
+    )
+    return {
+        "status": "executed" if actions else "no_action",
+        "reason": (
+            f"Committee applied {len(actions)} paper core-sleeve rebalance action(s)."
+            if actions else "No whole-share action met the rebalance minimum."
+        ),
+        "market_session": "open",
+        "run_id": run_id,
+        "actions": actions,
+        "plan": plan,
+        "post_rebalance": post_plan,
+        "quote_provider_status": snapshot.get("provider_status"),
+    }
+
+
+def current_core_holdings_at_prices(journal, price_map):
+    holdings = current_core_holdings(journal)
+    for symbol, item in holdings.items():
+        price = to_float(price_map.get(symbol)) or to_float(item.get("last_price"))
+        item["last_price"] = round_money(price)
+        item["market_value"] = round_money(to_float(item.get("shares")) * price)
+    return holdings
+
+
+def apply_core_prices(journal, prices):
+    updated = journal.copy()
+    for index, row in updated.iterrows():
+        symbol = str(row.get("symbol", "")).upper().strip()
+        if (
+            normalize_status(row.get("status")) == "open"
+            and str(row.get("setup_type", "")).strip().lower() == CORE_SETUP_TYPE
+            and to_float(prices.get(symbol)) > 0
+        ):
+            updated.at[index, "current_price"] = str(round(to_float(prices[symbol]), 4))
+    return updated
+
+
+def trim_core_position(symbol, shares_to_sell, price, run_id, timestamp):
+    remaining = float(shares_to_sell)
+    actions = []
+    journal = load_trade_journal()
+    lots = []
+    for _, row in journal.iterrows():
+        if normalize_status(row.get("status")) != "open":
+            continue
+        if str(row.get("setup_type", "")).strip().lower() != CORE_SETUP_TYPE:
+            continue
+        if str(row.get("symbol", "")).upper().strip() != symbol:
+            continue
+        lots.append(row)
+    lots.sort(key=lambda row: (str(row.get("opened_at", "")), str(row.get("id", ""))))
+
+    for lot in lots:
+        if remaining <= 0:
+            break
+        lot_shares = to_float(lot.get("shares"))
+        quantity = min(remaining, lot_shares)
+        reason = f"Committee autonomous core rebalance {run_id}."
+        lessons = "Allocation trim governed by sleeve drift, not a tactical profit target."
+        if quantity >= lot_shares:
+            closed = close_trade(lot.get("id"), price, reason, lessons, closed_at=timestamp)
+            closed_trade_id = closed.get("id")
+        else:
+            result = partial_close_trade(
+                lot.get("id"), quantity, price, reason, lessons, closed_at=timestamp
+            )
+            closed_trade_id = (result.get("closed_trade") or {}).get("id")
+        actions.append({
+            "action": "sell",
+            "symbol": symbol,
+            "shares": round_money(quantity),
+            "price": round_money(price),
+            "notional": round_money(quantity * price),
+            "trade_id": closed_trade_id,
+        })
+        remaining -= quantity
+    return actions
+
+
+def parse_brief_date(value):
+    try:
+        return datetime.fromisoformat(str(value or "").replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def normalize_eastern(now=None):
+    if now is None:
+        return datetime.now(EASTERN)
+    if now.tzinfo is None:
+        return now.replace(tzinfo=EASTERN)
+    return now.astimezone(EASTERN)
+
+
+def is_regular_market_hours(now=None):
+    now = normalize_eastern(now)
+    if now.isoweekday() > 5:
+        return False
+    return time(9, 30) <= now.time().replace(tzinfo=None) < time(16, 0)
 
 
 def build_core_rebalance_approval_id(created_at):

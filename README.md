@@ -8,9 +8,11 @@ AIFundOS separates decision-making from evidence, governance, memory, and tools 
 
 - **Committee agents:** Macro, Technical, Risk, CIO, and Devil's Advocate when a setup needs a serious challenge.
 - **Shared data layers:** market context, macro events, news, options evidence, backtests, SEC/fundamental facts, economic calendars, and data quality.
-- **Governance layers:** watch-only gates, human approval, risk vetoes, market-hours realism, earnings/event blocks, and core ETF policy bands.
+- **Governance layers:** autonomous paper-trading limits, manual override, risk vetoes, market-hours realism, earnings/event blocks, and core ETF policy bands.
 - **Memory layers:** research memory, daily setup reviews, weekly reviews, question feedback, and closed-trade outcome scoring.
 - **Tools and workflows:** dashboard, morning brief, paper ledger, paper fills, position manager, intraday monitor, email delivery, and desktop ticker.
+
+The Committee may learn, adapt bounded paper-trading parameters, and create or manage simulated positions without waiting for a human click. It may never connect this authority to live brokerage execution, remove hard risk limits, or conceal decisions from the audit trail.
 
 Rule of thumb: if a module makes or challenges a decision, it can be a Committee agent. If it supplies facts, calculations, or context, it should be a shared data layer. The full source of truth lives in `docs/governance/aifundos_system_roles_v1.md`.
 
@@ -22,6 +24,12 @@ python3 main.py morning today
 python3 main.py morning-email today
 python3 main.py morning-email today --dry-run
 python3 main.py email-retry morning
+python3 main.py email-health check
+python3 main.py autonomy plan
+python3 main.py autonomy execute
+python3 main.py autonomy status
+python3 main.py human-escalations check
+python3 main.py human-escalations notify
 python3 main.py macro today
 python3 main.py earnings MSFT
 python3 main.py portfolio MSFT
@@ -119,7 +127,23 @@ The `feedback summary` command:
 2. Groups realized outcomes by setup type, source, symbol, and decision tier.
 3. Uses `agent_run_id` to connect trades back to the CIO committee run when available.
 4. Scores linked agent calls against trade outcomes so Technical, Risk, CIO, Macro, Options, and Quant can be evaluated over time.
-5. Saves a local decision feedback report in `reports/feedback/`.
+5. Tracks progress toward a minimum 30-trade evidence milestone before strategy conclusions are treated as durable.
+6. Saves a local decision feedback report in `reports/feedback/`.
+
+The `autonomy` commands operate the Committee's autonomous paper mandate:
+
+1. `plan` evaluates the current brief, data quality, portfolio limits, and accumulated feedback before creating simulated planned orders.
+2. `execute` applies market-hours fills and exits to eligible paper orders using the existing ledger engine.
+3. `status` reports activity, hard limits, and progress toward the paper-evidence milestone.
+4. All autonomous actions are logged. Live brokerage execution is permanently outside this mandate.
+
+The `human-escalations` commands identify restricted changes that may deserve operator review:
+
+1. Source-code or strategy-logic revision after repeated failures or weak learning evidence.
+2. Paid data/provider review when recurring evidence gaps materially limit decisions.
+3. Risk-control counterfactual review only after a meaningful positive paper sample.
+4. Real-money readiness review only after substantially stronger evidence, data, and benchmark performance.
+5. These alerts never authorize the Committee to make the restricted change itself.
 
 The `ask` command and dashboard Ask Committee tab:
 
@@ -167,6 +191,7 @@ The `portfolio-governor today` command:
 5. Adds attribution by symbol, source, and setup type so AIFundOS can explain what made or lost money and why.
 6. Estimates paper execution friction using configurable commission, slippage, and bid/ask spread assumptions.
 7. States dividend and tax modeling limitations until those are upgraded from assumptions into full accrual/tax-lot tracking.
+8. Compares the paper account with SPY and a configurable TSP-style C/S proxy so active return is visible.
 
 The `intraday-monitor now` command:
 
@@ -177,6 +202,7 @@ The `intraday-monitor now` command:
 5. Saves the monitor report in `reports/intraday_monitor/` and writes a compact summary to memory.
 6. Supports `--dry-run` to validate email behavior without sending.
 7. Supports `--apply-fills` for the automated paper-order path.
+8. Re-runs strategy planning during market hours so call/put candidates can be validated against a usable live contract quote rather than being permanently rejected by the premarket pass.
 
 To schedule the intraday monitor every 15 minutes during market hours on macOS:
 
@@ -196,8 +222,11 @@ The `options-ready` command:
 1. Builds the options-readiness report from `framework/options_readiness.json`.
 2. Tracks defined-risk paper-options ideas in ignored `portfolio/options_journal.csv`.
 3. Supports beginner strategies only: long calls, long puts, call debit spreads, and put debit spreads.
-4. Blocks the current framework from treating starter Yahoo options data as execution-grade.
-5. Prepares AIFundOS for a future Intrinio, Tradier, or ORATS integration without starting a paid trial yet.
+4. Allows conservative paper-only long-call and long-put modeling when an actual contract passes strict DTE, volume, open-interest, spread, IV, and moneyness gates.
+5. Models entries at the ask and exits at the bid, while still refusing to call starter Yahoo data execution-grade.
+6. Prepares AIFundOS for a future Intrinio, Tradier, Polygon, ORATS, or OPRA integration without starting a paid trial yet.
+
+The strategy router in `framework/strategy_policy.json` chooses the strategy family and holding horizon before an order is created. Swing, position, long-call, and long-put paper experiments are enabled. Scalp and same-day strategies are represented but blocked until execution-grade intraday data and faster supervision are available. Use `python3 main.py strategy-review run` to inspect the historical evidence behind those choices.
 
 Useful commands:
 
@@ -339,15 +368,18 @@ launchctl load ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.email-retry.plist
 
 Retry logs are written to `reports/email_queue/automation.log`, `launchd.out.log`, and `launchd.err.log`.
 
+Use `python3 main.py email-health check` after changing email credentials. It distinguishes missing configuration, provider authentication failure, and connection failure without printing the password.
+
 The `automation-watchdog run` command:
 
 1. Checks whether today's morning brief exists during the morning catch-up window.
 2. Generates and emails the morning brief if it is missing between 4:45 AM and 11:30 AM.
 3. Retries queued emails while the morning retry window is open.
-4. Runs intraday monitoring during market hours without opening new positions by itself.
-5. Runs daily setup review after market close if the review is missing.
-6. Runs weekly review on Friday after the close if the review is missing.
-7. Saves a watchdog report in `reports/automation_watchdog/`.
+4. Runs the autonomous paper planner after a current morning brief is available.
+5. Runs paper-order execution and intraday monitoring during market hours.
+6. Runs daily setup review after market close if the review is missing.
+7. Runs weekly review on Friday after the close if the review is missing.
+8. Saves a watchdog report in `reports/automation_watchdog/`.
 
 To schedule the watchdog every 15 minutes on macOS:
 
@@ -361,6 +393,25 @@ launchctl load ~/Library/LaunchAgents/com.dfiore.ai-hedge-fund.automation-watchd
 ```
 
 Watchdog logs are written to `reports/automation_watchdog/automation.log`, `launchd.out.log`, and `launchd.err.log`.
+
+### Intraday Opportunity Engine
+
+AIFundOS separates market-hours automation into two lanes:
+
+- Every 5 minutes, the paper-fill lane checks planned entries and open-position exits using fresh execution-grade quotes.
+- Every 15 minutes, the Intraday Opportunity Engine scans the complete configured watchlist plus up to 20 U.S.-listed symbols discovered from fresh Benzinga market news. It ranks material price, volume, news, and setup changes and requests fresh Committee review only when the evidence changed enough to matter.
+
+Qualified intraday candidates enter the existing autonomous paper mandate. They must still pass current-day data quality, Committee decision, Risk Manager, portfolio exposure, category concentration, cash reserve, and defined-loss rules. No live brokerage authority is granted.
+
+Run a manual status scan with:
+
+```bash
+.venv/bin/python main.py intraday-discovery now --no-email
+```
+
+The engine writes its latest status and archived scans under `reports/intraday_discovery/`.
+
+On macOS, the five-minute service is installed as `com.dfiore.ai-hedge-fund.execution-lane`; the 15-minute supervisor remains `com.dfiore.ai-hedge-fund.automation-watchdog`.
 
 The `macro today` command:
 
@@ -471,9 +522,35 @@ See `docs/data_quality_systems_research.md` for the current data-provider resear
 - [x] Add better market data provider. Uses Tiingo latest equity prices when `TIINGO_API_KEY` is configured, or Alpaca latest stock bars when Alpaca keys are configured, with Yahoo as fallback.
 - [x] Add Quiver optional alternative-data slot. Uses `QUIVER_API_KEY` for a starter off-exchange data check; free/Hobbyist access is useful context but does not replace Trader-tier insider, hedge-fund, top-shareholder, or ETF-holdings data.
 - [x] Add options-readiness framework. Defines beginner strategies, risk limits, education terms, paper-options journal, and provider trial plan.
-- [ ] Add options data provider. Interim enhanced starter layer uses Yahoo/yfinance chains for watch-only put/call, IV, liquidity, and unusual-activity clues. Intrinio is the planned first trial candidate when ready.
+- [ ] Add options data provider. The interim Yahoo/yfinance layer now supports strict, defined-loss paper calls/puts and conservative bid/ask fills, but remains insufficient for OPRA-style flow, greeks history, scalping, or live execution.
+- [ ] Add institutional crowding provider. Quiver off-exchange and public filings remain partial/lagged; compare Quiver Trader, S3/Ortex, or an institutional terminal only after cost/benefit review.
+- [ ] Add licensed Wall Street research-note source. Benzinga analyst actions are connected, but full broker-note text requires a licensed source or user-supplied entitled PDFs with provenance.
 - [x] Add local data cache. Stores successful provider JSON responses under ignored `data_cache/` with short TTLs and stale fallback where appropriate.
 - [ ] Add provider comparison checks.
+- [x] Add benchmark attribution against SPY and a configurable TSP-style C/S proxy.
+- [x] Add bounded autonomous paper planning, execution, adaptation, and audit logging.
+- [x] Add strategy-first routing for swing, position, and defined-loss call/put paper experiments, with outcome memory separated by strategy family.
+- [ ] Deploy the worker to an always-online private host so laptop connectivity no longer controls progress.
+- [x] Restore SMTP authentication and verify a live morning-brief delivery.
+
+## Infrastructure And Strategy Expansion Roadmap
+
+The current system is suitable for bounded autonomous paper swing and position experiments. Faster or more complex strategies remain blocked until their data, uptime, and execution requirements are proven.
+
+- [x] Build Docker worker/dashboard deployment package for a private always-on host.
+- [ ] Deploy one authoritative AIFundOS worker to a wired, always-on private host with UPS, automatic restart, encrypted backup, and private VPN access.
+- [ ] Add an execution-grade streaming equity feed with quotes, bid/ask, spread, volume, timestamps, and one-minute bars.
+- [ ] Add quote-age rejection, corporate-action normalization, and independent provider agreement checks to the execution path.
+- [ ] Replace interval-only decision flow with an event-driven quote-to-risk-to-order-to-fill pipeline.
+- [ ] Add duplicate-order protection across restarts, gap-through-entry vetoes, halt handling, slippage/spread estimates, forced same-day exits, and ledger reconciliation.
+- [ ] Add execution-grade options data before autonomous long-call/long-put experiments: OPRA-quality chains, greeks, IV history, open interest, volume, and conservative quote synchronization.
+- [ ] Add borrow availability, borrow cost, SSR, margin, and gap-risk controls before equity-short experiments.
+- [ ] Run equity shorts in shadow mode before paper execution.
+- [ ] Run defined-loss long calls and puts only after the options data gate passes.
+- [ ] Require at least 20 reliable always-on market sessions before enabling same-day strategies.
+- [ ] Keep scalping disabled until sub-minute data, spread/slippage modeling, and continuous supervision are demonstrably reliable.
+
+See `docs/infrastructure_and_strategy_roadmap.md` for current status, readiness gates, and rollout order.
 
 ## Professional Portfolio To-Do List
 
@@ -483,5 +560,5 @@ See `docs/data_quality_systems_research.md` for the current data-provider resear
 - [x] Add v1 professional attribution: what made or lost money, by position, sleeve/source, sector/category, setup type, and agent recommendation source.
 - [x] Model v1 commissions, slippage, bid/ask spread, dividend, tax, and execution assumptions. Dividends/taxes are disclosed assumptions, not full accrual/tax-lot accounting yet.
 - [ ] Keep improving data quality toward institutional-grade reliability with stronger provider agreement checks and source conflict handling.
-- [ ] Prove whether the system has edge through enough paper-trade history before loosening trade gates.
+- [ ] Prove whether the system has edge through at least 30 closed paper trades, then extend toward 50 before loosening hard gates.
 - [ ] Observe newly built alerts and automations during live market hours, then tune thresholds to reduce missed events and noise.
